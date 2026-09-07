@@ -1,0 +1,13 @@
+msrv = "1.96"
+
+[[disallowed-methods]]
+path = "std::time::SystemTime::now"
+reason = "TaskerRT uses a virtual clock (spec 9.2); inject time so simulation stays deterministic"
+
+[[disallowed-methods]]
+path = "std::time::Instant::now"
+reason = "the scheduling core must never read the wall clock"
+
+[[disallowed-methods]]
+path = "std::thread::sleep"
+reason = "the scheduling core is synchronous and non-blocking; nothing in it may sleep"
