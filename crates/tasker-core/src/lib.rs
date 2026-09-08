@@ -6,6 +6,7 @@
 pub mod arena;
 pub mod job;
 pub mod priority;
+pub mod ready_set;
 pub mod resource;
 pub mod slot;
 pub mod time;
@@ -13,6 +14,7 @@ pub mod time;
 pub use arena::{Arena, JobId};
 pub use job::{AccountId, Job, JobState, PriorityClass, TransitionError};
 pub use priority::{FACTOR_SCALE, OrderKey, PriorityConfig, PriorityWeights, Score, score};
+pub use ready_set::{PriorityHeap, ReadyEntry, ReadySet};
 pub use resource::{Capacity, ResourceRequest, Resources};
 pub use slot::{CapacityError, SlotIndex, SlotInventory, WorkerSlot};
 pub use time::{VirtualDuration, VirtualTime};
