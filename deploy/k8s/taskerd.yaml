@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskerd
+  namespace: tasker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: taskerd }
+  template:
+    metadata:
+      labels: { app: taskerd }
+    spec:
+      containers:
+        - name: taskerd
+          image: tasker/taskerd:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - --listen=0.0.0.0:7070
+            - --metrics-listen=0.0.0.0:9090
+            - --worker-cpu-millis=4000
+            - --min-workers=1
+            - --max-workers=8
+          ports:
+            - { name: grpc, containerPort: 7070 }
+            - { name: metrics, containerPort: 9090 }
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { cpu: "2", memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskerd
+  namespace: tasker
+spec:
+  selector: { app: taskerd }
+  ports:
+    - { name: grpc, port: 7070, targetPort: grpc }
+    - { name: metrics, port: 9090, targetPort: metrics }

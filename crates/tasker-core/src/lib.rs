@@ -1,14 +1,24 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! TaskerRT scheduling core: pure, synchronous, no I/O, no wall clock.
+//!
+//! Layers, innermost first. Each may depend only on the ones before it:
+//! `domain` → `cluster` → `policy` → `engine`.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod cluster;
+pub mod domain;
+pub mod engine;
+pub mod policy;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Re-exports keep the public paths flat: `tasker_core::Job`, not
+// `tasker_core::domain::job::Job`.
+pub use cluster::{CapacityError, SlotIndex, SlotInventory, WorkerSlot};
+pub use domain::{
+    AccountId, Arena, Capacity, Deps, Job, JobId, JobState, PriorityClass, ResourceRequest,
+    Resources, TransitionError, VirtualDuration, VirtualTime,
+};
+pub use engine::{CycleConfig, CycleOutcome, LifecycleError, Scheduler};
+pub use policy::{
+    BackfillOutcome, BackfillScratch, DependencyError, DependencyTracker, DispatchDecision,
+    Disposition, FACTOR_SCALE, OrderKey, PackBudget, PackOutcome, PriorityConfig, PriorityHeap,
+    PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob, Score, easy_backfill, pack,
+    reservation_time, score,
+};

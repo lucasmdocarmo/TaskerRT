@@ -1,0 +1,53 @@
+syntax = "proto3";
+package tasker.v1;
+
+import "tasker/v1/common.proto";
+
+service ControlApi {
+  rpc Submit(SubmitRequest) returns (SubmitResponse);
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc Queue(QueueRequest) returns (QueueResponse);
+  rpc Nodes(NodesRequest) returns (NodesResponse);
+}
+
+message SubmitRequest {
+  uint32 account = 1;
+  PriorityClass priority_class = 2;
+  Resources request = 3;
+  uint64 walltime_nanos = 4;
+  repeated uint64 deps = 5;
+  bytes payload = 6;
+}
+
+message SubmitResponse {
+  uint64 job_id = 1;
+  JobState state = 2;
+}
+
+message CancelRequest { uint64 job_id = 1; }
+message CancelResponse { repeated uint64 cascaded = 1; }
+
+message StatusRequest { uint64 job_id = 1; }
+message StatusResponse {
+  uint64 job_id = 1;
+  JobState state = 2;
+}
+
+message QueueRequest {}
+message QueueResponse {
+  uint32 ready = 1;
+  uint32 blocked = 2;
+  uint32 running = 3;
+  uint64 cycles = 4;
+}
+
+message NodesRequest {}
+message Node {
+  uint32 slot = 1;
+  string name = 2;
+  Resources capacity = 3;
+  Resources allocated = 4;
+  bool attached = 5;
+}
+message NodesResponse { repeated Node nodes = 1; }

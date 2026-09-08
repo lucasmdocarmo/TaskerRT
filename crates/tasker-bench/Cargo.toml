@@ -7,6 +7,24 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+tasker-core.workspace = true
+tasker-sim.workspace = true
+tasker-proto.workspace = true
+tasker-worker.workspace = true
+taskerd.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+hdrhistogram.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "scheduling_cycle"
+harness = false

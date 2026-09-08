@@ -1,0 +1,32 @@
+[package]
+name        = "taskerd"
+description = "TaskerRT control plane: gRPC in, scheduler thread, dispatcher out."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tasker-core.workspace = true
+tasker-proto.workspace = true
+bytes.workspace = true
+crossbeam-queue.workspace = true
+crossbeam-utils.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+prometheus.workspace = true
+axum.workspace = true
+# Binary-only edges; the library never touches them.
+anyhow.workspace = true
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tasker-worker.workspace = true
