@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! TaskerRT scheduling core: pure, synchronous scheduling policy.
+//!
+//! This crate contains no async runtime, performs no I/O, and never reads the
+//! wall clock. Time enters through [`VirtualTime`] parameters.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod arena;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use arena::{Arena, JobId};

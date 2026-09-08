@@ -10,6 +10,7 @@ license      = "MIT OR Apache-2.0"
 authors      = ["Lucas Mariano do Carmo"]
 
 [workspace.dependencies]
+proptest = "1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn        = "deny"

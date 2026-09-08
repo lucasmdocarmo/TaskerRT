@@ -1,5 +1,8 @@
 msrv = "1.96"
 
+# Product names clippy would otherwise read as un-backticked identifiers.
+doc-valid-idents = ["TaskerRT", ".."]
+
 [[disallowed-methods]]
 path = "std::time::SystemTime::now"
 reason = "TaskerRT uses a virtual clock (spec 9.2); inject time so simulation stays deterministic"
