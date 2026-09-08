@@ -1,0 +1,58 @@
+syntax = "proto3";
+package tasker.v1;
+
+import "tasker/v1/common.proto";
+
+service WorkerApi {
+  rpc Attach(stream WorkerMessage) returns (stream DaemonMessage);
+}
+
+message WorkerMessage {
+  oneof body {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    TaskFinished finished = 3;
+    Draining draining = 4;
+  }
+}
+
+message Hello {
+  string name = 1;
+  Resources capacity = 2;
+}
+
+message Heartbeat {}
+
+// The worker received SIGTERM: send nothing new, let it finish what it has.
+message Draining {}
+
+enum TaskResult {
+  TASK_RESULT_UNSPECIFIED = 0;
+  TASK_RESULT_SUCCEEDED = 1;
+  TASK_RESULT_FAILED = 2;
+  TASK_RESULT_TIMED_OUT = 3;
+  TASK_RESULT_PANICKED = 4;
+}
+
+message TaskFinished {
+  uint64 job_id = 1;
+  TaskResult result = 2;
+}
+
+message DaemonMessage {
+  oneof body {
+    Welcome welcome = 1;
+    Assign assign = 2;
+    Kill kill = 3;
+  }
+}
+
+message Welcome { uint32 slot = 1; }
+
+message Assign {
+  uint64 job_id = 1;
+  bytes payload = 2;
+  uint64 walltime_nanos = 3;
+}
+
+message Kill { uint64 job_id = 1; }

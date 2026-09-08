@@ -1,0 +1,19 @@
+[package]
+name        = "tasker-cli"
+description = "Command-line client for the TaskerRT control plane."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+authors.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tasker-proto.workspace = true
+tasker-worker.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tonic.workspace = true

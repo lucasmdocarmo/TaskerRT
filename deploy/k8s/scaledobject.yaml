@@ -1,0 +1,26 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: tasker-worker
+  namespace: tasker
+spec:
+  scaleTargetRef:
+    name: tasker-worker
+  pollingInterval: 5
+  minReplicaCount: 1
+  maxReplicaCount: 8
+  # With minReplicaCount >= 1 KEDA hands scaling to an HPA, whose default
+  # scale-down stabilization is 300 s. Shorten it so the pool shrinks promptly.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+  triggers:
+    - type: external
+      metadata:
+        scalerAddress: taskerd.tasker.svc.cluster.local:7070

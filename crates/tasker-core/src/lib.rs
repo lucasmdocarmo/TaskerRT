@@ -1,26 +1,24 @@
-//! TaskerRT scheduling core: pure, synchronous scheduling policy.
+//! TaskerRT scheduling core: pure, synchronous, no I/O, no wall clock.
 //!
-//! This crate contains no async runtime, performs no I/O, and never reads the
-//! wall clock. Time enters through [`VirtualTime`] parameters.
+//! Layers, innermost first. Each may depend only on the ones before it:
+//! `domain` → `cluster` → `policy` → `engine`.
 
-pub mod arena;
-pub mod backfill;
-pub mod cycle;
-pub mod job;
-pub mod pack;
-pub mod priority;
-pub mod ready_set;
-pub mod resource;
-pub mod slot;
-pub mod time;
+pub mod cluster;
+pub mod domain;
+pub mod engine;
+pub mod policy;
 
-pub use arena::{Arena, JobId};
-pub use backfill::{BackfillOutcome, BackfillScratch, RunningJob, easy_backfill, reservation_time};
-pub use cycle::{CycleConfig, CycleOutcome, Scheduler};
-pub use job::{AccountId, Job, JobState, PriorityClass, TransitionError};
-pub use pack::{DispatchDecision, Disposition, PackBudget, PackOutcome, pack};
-pub use priority::{FACTOR_SCALE, OrderKey, PriorityConfig, PriorityWeights, Score, score};
-pub use ready_set::{PriorityHeap, ReadyEntry, ReadySet};
-pub use resource::{Capacity, ResourceRequest, Resources};
-pub use slot::{CapacityError, SlotIndex, SlotInventory, WorkerSlot};
-pub use time::{VirtualDuration, VirtualTime};
+// Re-exports keep the public paths flat: `tasker_core::Job`, not
+// `tasker_core::domain::job::Job`.
+pub use cluster::{CapacityError, SlotIndex, SlotInventory, WorkerSlot};
+pub use domain::{
+    AccountId, Arena, Capacity, Deps, Job, JobId, JobState, PriorityClass, ResourceRequest,
+    Resources, TransitionError, VirtualDuration, VirtualTime,
+};
+pub use engine::{CycleConfig, CycleOutcome, LifecycleError, Scheduler};
+pub use policy::{
+    BackfillOutcome, BackfillScratch, DependencyError, DependencyTracker, DispatchDecision,
+    Disposition, FACTOR_SCALE, OrderKey, PackBudget, PackOutcome, PriorityConfig, PriorityHeap,
+    PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob, Score, easy_backfill, pack,
+    reservation_time, score,
+};

@@ -13,8 +13,8 @@ ratchets them down; M2 onward must not regress them.
 | Benchmark | Fixture | Time (mean, 95% CI) | Per element |
 |---|---|---|---|
 | `priority/score_one_job` | — | 1.20 ns [1.19, 1.22] | — |
-| `ready_set/admit` | 1,000 pending | 8.26 µs [8.22, 8.34] | 8.3 ns/job |
-| `ready_set/admit` | 10,000 pending | 111 µs [110, 113] | 11.1 ns/job |
+| `scheduler/submit` | 1,000 pending | 17.2 µs [17.2, 17.3] | 17.2 ns/job |
+| `scheduler/submit` | 10,000 pending | 208 µs [207, 208] | 20.8 ns/job |
 | `cycle/full` | 1,000 pending / 100 running | 576 µs [574, 578] | 576 ns/job |
 | `cycle/full` | **10,000 pending / 1,000 running** | **1.83 ms [1.82, 1.84]** | 183 ns/job |
 
@@ -37,6 +37,23 @@ The bold row is the spec §7.1 fixture and the number M8 optimizes against.
 - **1.83 ms fits inside the spec §6 default 5 ms tick**, with margin. It is far
   from the microsecond bound §7.1 aspires to; closing that gap is M8's scope.
 
+## M2 re-measurement (2026-09-08)
+
+`ready_set/admit` became `scheduler/submit`, which additionally runs
+`DependencyTracker::register` and the `Submitted → Ready` transition per job.
+Per-job cost roughly doubled (8.3 → 17.2 ns at 1,000; 11.1 → 20.8 ns at
+10,000), which is the expected price of the tracker's two-pass register.
+Submission is not on the cycle hot path.
+
+`cycle/full` at 10 000 × 1 000 measured **1.71 ms [1.69, 1.73]** against the M1
+figure of 1.83 ms — criterion reports −5.6 % (p < 0.05) versus its saved M1 run.
+Nothing in M2 touches a cycle with no completions, so this is run-to-run
+variance across sessions, not an M2 improvement. For regression purposes the
+cycle baseline is **unchanged at ~1.8 ms**; the 10 % guard is measured from
+there.
+
+`priority/score_one_job`: 1.18 ns, unchanged.
+
 ## Notes
 
 Criterion reports mean with a confidence interval, not p99. The p99 figure spec
@@ -52,3 +69,30 @@ synthetic fixture; a fixture engineered to hit it belongs in M8.
 Criterion reported 4–12 % outliers per benchmark on this run. For a baseline
 that is acceptable; a ratchet comparison should use `--save-baseline` /
 `--baseline` on a quiet machine.
+
+## M3 end-to-end latency (2026-09-08)
+
+Parent §7.3: submit→start, open loop, coordinated omission accounted for (the
+payload carries the *intended* send time; a stalled client shows up as latency).
+
+**Command:** `cargo run --release -p tasker-bench --bin loadgen -- --rate 2000 --seconds 10`
+**Fixture:** daemon + 4 in-process sleep workers (64 000 millicores each), 100-millicore
+jobs sleeping 10 ms, 5 ms tick. 20000 samples, 0 rejected.
+
+| Quantile | Latency |
+|---|---|
+| p50 | 1.42 ms |
+| p90 | 2.12 ms |
+| p99 | 3.49 ms |
+| p99.9 | 19.20 ms |
+| p99.99 | 26.19 ms |
+| max | 26.93 ms |
+| mean | 1.51 ms |
+
+**Reading it.** p50 is *below* half a tick: an inbox push unparks the scheduler,
+so a submit triggers an on-demand cycle instead of waiting for the 5 ms timer.
+The 1.4 ms median is therefore gRPC round trip + drain + one cycle + dispatch +
+stream delivery + task spawn. p99 at 3.5 ms is mild queueing under a 2 000/s
+arrival rate. The step from p99 to p99.9 (3.5 → 19 ms) is the tail this project
+exists to hunt: runtime scheduling of the gRPC handlers, dispatcher wake-ups,
+and tokio timer coalescing in the workers. M8 measures that gap and attacks it.

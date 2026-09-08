@@ -9,32 +9,7 @@ use tasker_core::{
     PriorityWeights, ResourceRequest, Resources, RunningJob, SlotInventory, VirtualDuration,
     VirtualTime,
 };
-
-/// SplitMix64. Thirty lines, no dependency, and identical output everywhere —
-/// which is the whole requirement for a benchmark fixture.
-#[derive(Clone, Debug)]
-pub struct SplitMix64(u64);
-
-impl SplitMix64 {
-    #[must_use]
-    pub const fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform-ish in `[low, high)`. Modulo bias is irrelevant for fixtures.
-    pub fn range(&mut self, low: u64, high: u64) -> u64 {
-        debug_assert!(high > low);
-        low + self.next_u64() % (high - low)
-    }
-}
+use tasker_sim::SplitMix64;
 
 /// A generated cluster plus its queued and running work.
 #[derive(Debug)]
@@ -92,15 +67,14 @@ pub fn synthetic(pending: usize, running: usize, slots: u32, seed: u64) -> Workl
     for _ in 0..pending {
         let cpu = u32::try_from(rng.range(250, u64::from(SLOT_CPU))).expect("range fits u32");
         let mem = rng.range(1 << 27, 8 << 30);
-        let mut job = Job::new(
+        let job = Job::new(
             AccountId::new(u32::try_from(rng.range(0, 16)).expect("range fits u32")),
             PriorityClass::ALL[usize::try_from(rng.range(0, 4)).expect("range fits usize")],
             VirtualTime::from_nanos(rng.range(0, 3_600 * SECOND)),
             ResourceRequest::new(cpu, mem, 0),
             VirtualDuration::from_secs(rng.range(30, 7_200)),
         );
-        job.try_transition(JobState::Ready)
-            .expect("Submitted -> Ready");
+        // Left `Submitted`: `Scheduler::submit` classifies it.
         admitted.push(jobs.insert(job));
     }
 

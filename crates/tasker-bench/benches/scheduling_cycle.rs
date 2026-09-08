@@ -20,22 +20,32 @@ fn bench_priority_score(c: &mut Criterion) {
     });
 }
 
-fn bench_ready_set_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ready_set/admit");
+fn bench_submit(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scheduler/submit");
     for pending in [1_000_usize, 10_000] {
-        let workload = synthetic(pending, 0, SLOTS, SEED);
         let config = bench_config();
         group.throughput(Throughput::Elements(pending as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(pending), &pending, |b, _| {
-            b.iter(|| {
-                let mut scheduler = Scheduler::with_slots(workload.jobs.capacity_slots());
-                for id in &workload.admitted {
-                    let job = workload.jobs.get(*id).expect("job exists");
-                    scheduler.admit(*id, job, VirtualTime::ZERO, &config);
-                }
-                black_box(scheduler.pending())
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(pending),
+            &pending,
+            |b, &pending| {
+                b.iter_batched(
+                    || synthetic(pending, 0, SLOTS, SEED),
+                    |mut workload| {
+                        let mut scheduler = Scheduler::with_slots(workload.jobs.capacity_slots());
+                        // `&workload.admitted` and `&mut workload.jobs` are disjoint
+                        // fields, so both borrows may coexist.
+                        for id in &workload.admitted {
+                            scheduler
+                                .submit(*id, &mut workload.jobs, VirtualTime::ZERO, &config)
+                                .expect("fresh Submitted job");
+                        }
+                        black_box(scheduler.pending())
+                    },
+                    criterion::BatchSize::LargeInput,
+                );
+            },
+        );
     }
     group.finish();
 }
@@ -53,11 +63,12 @@ fn bench_full_cycle(c: &mut Criterion) {
                     || {
                         // Setup is excluded from the measurement: a fresh
                         // workload and a scheduler already holding every job.
-                        let workload = synthetic(pending, running, SLOTS, SEED);
+                        let mut workload = synthetic(pending, running, SLOTS, SEED);
                         let mut scheduler = Scheduler::with_slots(workload.jobs.capacity_slots());
                         for id in &workload.admitted {
-                            let job = workload.jobs.get(*id).expect("job exists");
-                            scheduler.admit(*id, job, VirtualTime::ZERO, &config);
+                            scheduler
+                                .submit(*id, &mut workload.jobs, VirtualTime::ZERO, &config)
+                                .expect("fresh Submitted job");
                         }
                         let decisions: Vec<DispatchDecision> = Vec::with_capacity(pending);
                         (workload, scheduler, decisions)
@@ -84,7 +95,7 @@ fn bench_full_cycle(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_priority_score,
-    bench_ready_set_build,
+    bench_submit,
     bench_full_cycle
 );
 criterion_main!(benches);

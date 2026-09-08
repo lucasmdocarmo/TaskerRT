@@ -1,6 +1,6 @@
 [package]
-name        = "tasker-core"
-description = "Pure, synchronous scheduling policy: capacity, priority, packing, EASY backfill."
+name        = "tasker-sim"
+description = "Deterministic simulation harness for the TaskerRT scheduling core."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ authors.workspace      = true
 workspace = true
 
 [dependencies]
-bytes.workspace = true
+tasker-core.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 
