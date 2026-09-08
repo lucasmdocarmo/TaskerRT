@@ -1,7 +1,7 @@
 msrv = "1.96"
 
 # Product names clippy would otherwise read as un-backticked identifiers.
-doc-valid-idents = ["TaskerRT", "QoS", ".."]
+doc-valid-idents = ["TaskerRT", "QoS", "SplitMix64", ".."]
 
 [[disallowed-methods]]
 path = "std::time::SystemTime::now"

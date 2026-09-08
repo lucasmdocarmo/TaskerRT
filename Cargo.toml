@@ -13,6 +13,8 @@ authors      = ["Lucas Mariano do Carmo"]
 smallvec = "1"
 thiserror = "2"
 proptest = "1"
+criterion = "0.8.2"
+tasker-core = { path = "crates/tasker-core" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn        = "deny"

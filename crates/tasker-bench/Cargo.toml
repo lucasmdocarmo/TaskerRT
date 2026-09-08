@@ -7,6 +7,14 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+tasker-core.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "scheduling_cycle"
+harness = false
