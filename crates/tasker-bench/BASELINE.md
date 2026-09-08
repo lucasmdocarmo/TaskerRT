@@ -96,3 +96,32 @@ stream delivery + task spawn. p99 at 3.5 ms is mild queueing under a 2 000/s
 arrival rate. The step from p99 to p99.9 (3.5 → 19 ms) is the tail this project
 exists to hunt: runtime scheduling of the gRPC handlers, dispatcher wake-ups,
 and tokio timer coalescing in the workers. M8 measures that gap and attacks it.
+
+## M4 cluster smoke (2026-09-08)
+
+Parent §9.3: the scaler endpoint drives the worker Deployment to the
+scheduler's demand. `docker-desktop`, KEDA 2.x, `ScaledObject` with
+`minReplicaCount 1`, `maxReplicaCount 8`, HPA scale-down stabilization 30 s.
+
+**Command:** `make -C deploy/k8s smoke` — 40 jobs × 3 000 millicores × 20 s
+against 4 000-millicore workers (one job per worker at a time).
+
+| Time (s from submit) | replicas | desired | Event |
+|---|---|---|---|
+| −5 | 1 | 1 | baseline, one warm worker |
+| 0 | 1 | 8 | 40 jobs submitted; demand clamps to max |
+| +5 | 5 | 8 | HPA's first sync after KEDA's poll |
+| +21 | 8 | 8 | full demand met |
+| +107 | 8 | 6 | queue draining; demand tracks remaining work |
+| +127 | 6 | 1 | stabilization window elapsed; scale-down begins |
+| +142 | 3 | 1 | |
+| ~+160 | 1 | 1 | back to the warm minimum |
+
+**Reading it.** Scale-up latency (~21 s to full demand) is the sum of KEDA's
+poll, the HPA's 15 s sync period, and pod scheduling + image start on a warm
+node; none of it is the scheduler. Scale-down is governed entirely by the HPA
+stabilization window we set (30 s) plus its sync period — the daemon's demand
+figure dropped the instant the queue emptied. The 40 jobs completed on 8
+workers in 5 rounds of 20 s, as the arithmetic predicts. Draining workers
+finished their in-flight job before exiting; no job was requeued during
+scale-down (`worker left ... requeued=0` in the daemon log).

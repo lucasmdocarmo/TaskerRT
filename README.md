@@ -89,11 +89,12 @@ everything downstream of it.
 ### Kubernetes (docker-desktop + KEDA)
 
 `deploy/` holds a multi-stage `Dockerfile` and plain-YAML manifests. The daemon
-implements KEDA's external scaler protocol: every 5 s KEDA asks it how many
-workers it wants (`ceil((cpu_ready + cpu_running) / worker_cpu)`, clamped to
-`[min, max]`) and sets the worker Deployment's replicas to exactly that. A
-worker that receives SIGTERM tells the daemon it is draining, finishes what it
-is running, and exits.
+implements KEDA's external scaler protocol: KEDA polls it for how many workers
+it wants (`ceil((cpu_ready + cpu_running) / worker_cpu)`, clamped to
+`[min, max]`) and, through a Kubernetes HPA, sets the worker Deployment's
+replicas to exactly that number. Scale-down speed is the HPA stabilization
+window set in `scaledobject.yaml`. A worker that receives SIGTERM tells the
+daemon it is draining, finishes what it is running, and exits.
 
 Prerequisites: Docker Desktop with Kubernetes enabled, `kubectl`, and KEDA
 (`helm install keda kedacore/keda -n keda --create-namespace`).
