@@ -10,6 +10,8 @@ license      = "MIT OR Apache-2.0"
 authors      = ["Lucas Mariano do Carmo"]
 
 [workspace.dependencies]
+smallvec = "1"
+thiserror = "2"
 proptest = "1"
 
 [workspace.lints.rust]
