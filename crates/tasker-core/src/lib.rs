@@ -4,6 +4,7 @@
 //! wall clock. Time enters through [`VirtualTime`] parameters.
 
 pub mod arena;
+pub mod backfill;
 pub mod job;
 pub mod pack;
 pub mod priority;
@@ -13,6 +14,7 @@ pub mod slot;
 pub mod time;
 
 pub use arena::{Arena, JobId};
+pub use backfill::{BackfillOutcome, BackfillScratch, RunningJob, easy_backfill, reservation_time};
 pub use job::{AccountId, Job, JobState, PriorityClass, TransitionError};
 pub use pack::{DispatchDecision, Disposition, PackBudget, PackOutcome, pack};
 pub use priority::{FACTOR_SCALE, OrderKey, PriorityConfig, PriorityWeights, Score, score};
