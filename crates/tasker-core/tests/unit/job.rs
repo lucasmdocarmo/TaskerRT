@@ -27,10 +27,13 @@ fn submitted_may_go_blocked_ready_or_cancelled() {
 }
 
 #[test]
-fn preempted_requeues_to_ready_only() {
+fn preempted_may_requeue_finish_or_be_cancelled() {
     assert!(JobState::Preempted.can_transition_to(JobState::Ready));
+    // A task can finish inside its eviction grace; the result is kept.
+    assert!(JobState::Preempted.can_transition_to(JobState::Completed));
+    assert!(JobState::Preempted.can_transition_to(JobState::Failed));
+    assert!(JobState::Preempted.can_transition_to(JobState::Cancelled));
     assert!(!JobState::Preempted.can_transition_to(JobState::Running));
-    assert!(!JobState::Preempted.can_transition_to(JobState::Completed));
 }
 
 #[test]

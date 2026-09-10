@@ -6,8 +6,8 @@
 
 use tasker_core::{
     AccountId, Arena, CycleConfig, FairShareConfig, Job, JobId, JobState, PackBudget,
-    PriorityClass, PriorityConfig, PriorityWeights, ResourceRequest, Resources, RunningJob,
-    SlotInventory, VirtualDuration, VirtualTime,
+    PreemptConfig, PriorityClass, PriorityConfig, PriorityWeights, ResourceRequest, Resources,
+    RunningJob, SlotInventory, VirtualDuration, VirtualTime,
 };
 use tasker_sim::SplitMix64;
 
@@ -101,6 +101,7 @@ pub fn bench_config() -> CycleConfig {
             ResourceRequest::new(SLOT_CPU, SLOT_MEM, 4),
         ),
         fairshare: FairShareConfig::default(),
+        preempt: PreemptConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 10_000,
     }

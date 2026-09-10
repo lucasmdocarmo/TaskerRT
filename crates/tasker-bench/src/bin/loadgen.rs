@@ -13,7 +13,9 @@ use tasker_core::Resources;
 use tasker_proto::v1;
 use tasker_proto::v1::control_api_client::ControlApiClient;
 use tasker_wal::SyncPolicy;
-use tasker_worker::{SleepExecutor, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload};
+use tasker_worker::{
+    SleepExecutor, Stop, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload,
+};
 use taskerd::{Daemon, DaemonConfig, clock};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -69,7 +71,7 @@ struct LatencyExecutor {
 }
 
 impl TaskExecutor for LatencyExecutor {
-    async fn run(&self, payload: Bytes) -> Result<(), TaskError> {
+    async fn run(&self, payload: Bytes, stop: Stop) -> Result<(), TaskError> {
         let started = clock::now().as_nanos();
         if let Some(stamp) = payload.get(8..16).and_then(|b| b.try_into().ok()) {
             let intended = u64::from_le_bytes(stamp);
@@ -81,7 +83,7 @@ impl TaskExecutor for LatencyExecutor {
                 .record(micros.max(1))
                 .ok();
         }
-        SleepExecutor.run(payload).await
+        SleepExecutor.run(payload, stop).await
     }
 }
 

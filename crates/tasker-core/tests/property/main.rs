@@ -7,5 +7,6 @@ mod backfill;
 mod capacity;
 mod eligibility;
 mod fairshare;
+mod preempt;
 mod priority;
 mod ready_set;

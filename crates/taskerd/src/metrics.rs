@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{Router, routing::get};
 use prometheus::{
-    Encoder, GaugeVec, Histogram, HistogramOpts, IntGauge, Opts, Registry, TextEncoder,
+    Encoder, GaugeVec, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry, TextEncoder,
 };
 use tokio::net::TcpListener;
 
@@ -22,6 +22,8 @@ pub struct Metrics {
     pub account_usage: GaugeVec,
     /// Fair-share factor per account, 0..=1.
     pub account_fairshare: GaugeVec,
+    /// Evictions decided, total.
+    pub preemptions: IntCounter,
     pub cycle_seconds: Histogram,
 }
 
@@ -47,6 +49,14 @@ impl Metrics {
                 .expect("unique metric name");
             g
         };
+        let preemptions = IntCounter::new(
+            "tasker_preemptions_total",
+            "Jobs evicted for a higher class",
+        )
+        .expect("valid metric name");
+        registry
+            .register(Box::new(preemptions.clone()))
+            .expect("unique metric name");
         let cycle_seconds = Histogram::with_opts(
             HistogramOpts::new("tasker_cycle_seconds", "Scheduling cycle duration")
                 // Buckets from 10 µs to ~40 ms: the range a cycle can plausibly take.
@@ -70,6 +80,7 @@ impl Metrics {
                 "tasker_account_fairshare",
                 "Fair-share factor per account, 0..=1",
             ),
+            preemptions,
             cycle_seconds,
             registry,
         })

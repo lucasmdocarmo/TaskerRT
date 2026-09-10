@@ -5,7 +5,7 @@ pub mod executor;
 pub mod worker;
 
 pub use executor::{
-    CommandExecutor, SleepExecutor, TaskError, TaskExecutor, command_payload,
-    parse_command_payload, sleep_payload,
+    CommandExecutor, SleepExecutor, Stop, TaskError, TaskExecutor, command_payload,
+    parse_command_payload, sleep_payload, stop_channel,
 };
 pub use worker::{Worker, WorkerConfig, WorkerError};

@@ -19,9 +19,22 @@ fn job_strategy() -> impl Strategy<Value = Job> {
         prop::collection::vec(any::<u64>(), 0..6),
         prop::collection::vec(any::<u8>(), 0..64),
         0_usize..JobState::ALL.len(),
+        any::<u8>(),
     )
         .prop_map(
-            |(account, class, submit, cpu, mem, gpus, walltime, deps, payload, state)| {
+            |(
+                account,
+                class,
+                submit,
+                cpu,
+                mem,
+                gpus,
+                walltime,
+                deps,
+                payload,
+                state,
+                evictions,
+            )| {
                 let mut j = Job::new(
                     AccountId::new(account),
                     PriorityClass::ALL[class],
@@ -32,6 +45,7 @@ fn job_strategy() -> impl Strategy<Value = Job> {
                 j.deps.extend(deps.into_iter().map(JobId::from_bits));
                 j.payload = Bytes::from(payload);
                 j.state = JobState::ALL[state];
+                j.preemptions = evictions;
                 j
             },
         )
@@ -52,6 +66,7 @@ fn record_strategy() -> impl Strategy<Value = Record> {
         event(|id, at| Record::Failed { id, at }),
         event(|id, at| Record::Cancelled { id, at }),
         event(|id, at| Record::Requeued { id, at }),
+        event(|id, at| Record::Preempted { id, at }),
         any::<u64>().prop_map(|id| Record::Forgotten {
             id: JobId::from_bits(id),
         }),

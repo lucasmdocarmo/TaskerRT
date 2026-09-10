@@ -12,12 +12,12 @@ use tasker_proto::v1::daemon_message::Body as Down;
 use tasker_proto::v1::worker_api_client::WorkerApiClient;
 use tasker_proto::v1::worker_message::Body as Up;
 use tokio::signal::unix::{Signal, SignalKind, signal};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Sleep;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::TaskExecutor;
+use crate::{Stop, TaskExecutor, stop_channel};
 
 /// How to reach the daemon and what to advertise.
 #[derive(Clone, Debug)]
@@ -46,17 +46,28 @@ pub enum WorkerError {
     Io(#[from] std::io::Error),
 }
 
-/// In-flight tasks, aborted together when the worker goes away. Without this
-/// a detached worker's tasks would keep the request stream open until they
-/// finished, and the daemon would learn of the loss only then.
+/// One in-flight task: its join handle and the sender that asks it to stop.
+#[derive(Debug)]
+struct Task {
+    handle: JoinHandle<()>,
+    stop: watch::Sender<Option<Duration>>,
+}
+
+/// In-flight tasks, aborted together when the worker exits for good.
 #[derive(Debug, Default)]
-struct TaskSet(HashMap<u64, JoinHandle<()>>);
+struct TaskSet(HashMap<u64, Task>);
+
+impl TaskSet {
+    fn prune(&mut self) {
+        self.0.retain(|_, t| !t.handle.is_finished());
+    }
+}
 
 impl Drop for TaskSet {
     fn drop(&mut self) {
         // `values()` borrows; `abort` needs only `&JoinHandle`.
-        for handle in self.0.values() {
-            handle.abort();
+        for task in self.0.values() {
+            task.handle.abort();
         }
     }
 }
@@ -182,7 +193,7 @@ impl<E: TaskExecutor> Worker<E> {
         let mut client = WorkerApiClient::connect(self.config.daemon.clone()).await?;
         let (tx, rx) = mpsc::channel(64);
         // Prune finished tasks first: only what is still running is in flight.
-        session.tasks.0.retain(|_, h| !h.is_finished());
+        session.tasks.prune();
         let in_flight: Vec<u64> = session.tasks.0.keys().copied().collect();
         tx.send(up(Up::Hello(v1::Hello {
             name: self.config.name.clone(),
@@ -223,12 +234,19 @@ impl<E: TaskExecutor> Worker<E> {
                     Some(v1::DaemonMessage { body: Some(Down::Assign(assign)) }) => {
                         let job_id = assign.job_id;
                         // Results go to the session's channel, so they survive this stream.
-                        let handle = tokio::spawn(run_task(Arc::clone(&self.executor), assign, results_tx.clone()));
-                        tasks.0.insert(job_id, handle);
+                        let (stop_tx, stop) = stop_channel();
+                        let handle = tokio::spawn(run_task(Arc::clone(&self.executor), assign, results_tx.clone(), stop));
+                        tasks.0.insert(job_id, Task { handle, stop: stop_tx });
                     }
                     Some(v1::DaemonMessage { body: Some(Down::Kill(kill)) }) => {
-                        if let Some(handle) = tasks.0.remove(&kill.job_id) {
-                            handle.abort();
+                        if let Some(task) = tasks.0.remove(&kill.job_id) {
+                            task.handle.abort();
+                        }
+                    }
+                    Some(v1::DaemonMessage { body: Some(Down::Preempt(p)) }) => {
+                        // The task keeps its entry: it reports Preempted when it stops.
+                        if let Some(task) = tasks.0.get(&p.job_id) {
+                            task.stop.send(Some(Duration::from_nanos(p.grace_nanos))).ok();
                         }
                     }
                     Some(_) => {}
@@ -244,7 +262,7 @@ impl<E: TaskExecutor> Worker<E> {
                     }
                 }
                 _ = heartbeat.tick() => {
-                    tasks.0.retain(|_, h| !h.is_finished());
+                    tasks.prune();
                     if tx.send(up(Up::Heartbeat(v1::Heartbeat {}))).await.is_err() {
                         return Ok(SessionEnd::Disconnected);
                     }
@@ -258,7 +276,7 @@ impl<E: TaskExecutor> Worker<E> {
                 }
                 // Not even polled until SIGTERM has arrived.
                 _ = drain_poll.tick(), if *draining => {
-                    tasks.0.retain(|_, h| !h.is_finished());
+                    tasks.prune();
                     if tasks.0.is_empty() && results_rx.is_empty() {
                         tracing::info!(slot, "drained; exiting");
                         return Ok(SessionEnd::Drained);
@@ -278,20 +296,27 @@ impl<E: TaskExecutor> Worker<E> {
     }
 }
 
-/// Runs one assignment and reports its result. Never panics itself: the
-/// executor runs in an inner task so its panic surfaces as a `JoinError`.
-async fn run_task<E: TaskExecutor>(
-    executor: Arc<E>,
-    assign: v1::Assign,
-    tx: mpsc::Sender<v1::WorkerMessage>,
-) {
-    let job_id = assign.job_id;
-    let walltime = Duration::from_nanos(assign.walltime_nanos);
-    let inner = tokio::spawn(async move { executor.run(assign.payload).await });
-    let abort = inner.abort_handle();
+/// The nested result of joining the executor task under a timeout.
+type Joined = Result<
+    Result<Result<(), crate::TaskError>, tokio::task::JoinError>,
+    tokio::time::error::Elapsed,
+>;
 
-    let result = match tokio::time::timeout(walltime, inner).await {
+/// Turns a join outcome into a report. `None` means aborted by a Kill: the
+/// daemon already moved on, so nothing is sent. `stopped` reclassifies an
+/// error after a stop request as Preempted rather than Failed.
+fn classify(
+    joined: Joined,
+    abort: &tokio::task::AbortHandle,
+    job_id: u64,
+    stopped: bool,
+) -> Option<v1::TaskResult> {
+    Some(match joined {
         Ok(Ok(Ok(()))) => v1::TaskResult::Succeeded,
+        Ok(Ok(Err(e))) if stopped => {
+            tracing::info!(job_id, reason = %e, "task stopped for preemption");
+            v1::TaskResult::Preempted
+        }
         Ok(Ok(Err(e))) => {
             tracing::warn!(job_id, error = %e, "task failed");
             v1::TaskResult::Failed
@@ -300,13 +325,46 @@ async fn run_task<E: TaskExecutor>(
             tracing::error!(job_id, "task panicked");
             v1::TaskResult::Panicked
         }
-        // Aborted by a Kill: the daemon already moved on; nothing to report.
-        Ok(Err(_cancelled)) => return,
+        Ok(Err(_cancelled)) => return None,
         Err(_elapsed) => {
             abort.abort();
             tracing::warn!(job_id, "task exceeded its walltime");
             v1::TaskResult::TimedOut
         }
+    })
+}
+
+/// Runs one assignment and reports its result. Never panics itself: the
+/// executor runs in an inner task so its panic surfaces as a `JoinError`.
+/// A stop request switches from the walltime race to the grace race.
+async fn run_task<E: TaskExecutor>(
+    executor: Arc<E>,
+    assign: v1::Assign,
+    tx: mpsc::Sender<v1::WorkerMessage>,
+    mut stop: Stop,
+) {
+    let job_id = assign.job_id;
+    let walltime = Duration::from_nanos(assign.walltime_nanos);
+    let executor_stop = stop.clone();
+    let mut inner = tokio::spawn(async move { executor.run(assign.payload, executor_stop).await });
+    let abort = inner.abort_handle();
+
+    let result = tokio::select! {
+        joined = tokio::time::timeout(walltime, &mut inner) => classify(joined, &abort, job_id, false),
+        () = stop.wait() => {
+            let grace = stop.grace().unwrap_or(Duration::ZERO);
+            match tokio::time::timeout(grace, &mut inner).await {
+                Err(_elapsed) => {
+                    abort.abort();
+                    tracing::warn!(job_id, "task ignored its stop; killed at the grace deadline");
+                    Some(v1::TaskResult::Preempted)
+                }
+                joined => classify(joined, &abort, job_id, true),
+            }
+        }
+    };
+    let Some(result) = result else {
+        return;
     };
     tx.send(up(Up::Finished(v1::TaskFinished {
         job_id,

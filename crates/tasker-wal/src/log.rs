@@ -8,7 +8,7 @@ use crate::record::FRAME_HEADER;
 use crate::{Record, WalError};
 
 /// First eight bytes of every log file.
-pub const LOG_MAGIC: &[u8; 8] = b"TKRWAL01";
+pub const LOG_MAGIC: &[u8; 8] = b"TKRWAL02";
 
 /// How hard each batch is pushed toward the disk.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

@@ -98,7 +98,11 @@ impl JobState {
                     Self::Running,
                     Self::Completed | Self::Failed | Self::Preempted | Self::Cancelled
                 )
-                | (Self::Preempted, Self::Ready)
+                // A task may finish, fail, or be cancelled inside its eviction grace.
+                | (
+                    Self::Preempted,
+                    Self::Ready | Self::Completed | Self::Failed | Self::Cancelled
+                )
         )
     }
 }
@@ -128,6 +132,8 @@ pub struct Job {
     /// Opaque bytes for the worker. Cloning is a refcount bump.
     pub payload: Bytes,
     pub state: JobState,
+    /// Times this job was evicted for a higher class; immune at the configured cap.
+    pub preemptions: u8,
 }
 
 impl Job {
@@ -150,6 +156,7 @@ impl Job {
             deps: Deps::new(),
             payload: Bytes::new(),
             state: JobState::Submitted,
+            preemptions: 0,
         }
     }
 

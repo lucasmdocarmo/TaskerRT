@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use crossbeam_utils::sync::Parker;
 use tasker_core::{
-    AccountId, Arena, ArenaRestoreError, CycleConfig, CycleOutcome, DispatchDecision, FACTOR_SCALE,
-    Job, JobId, JobState, LifecycleError, Resources, RunningJob, Scheduler, SlotIndex,
-    SlotInventory, SlotState, USAGE_PER_CORE_SECOND, VirtualDuration, VirtualTime,
+    AccountId, Arena, ArenaRestoreError, CycleConfig, CycleOutcome, DispatchDecision, Eviction,
+    FACTOR_SCALE, Job, JobId, JobState, LifecycleError, Resources, RunningJob, Scheduler,
+    SlotIndex, SlotInventory, SlotState, USAGE_PER_CORE_SECOND, VirtualDuration, VirtualTime,
+    plan_preemption,
 };
 use tasker_wal::{Record, Recovered, WalError};
 
@@ -53,6 +54,8 @@ pub struct Engine {
     promoted: Vec<JobId>,
     cascade: Vec<JobId>,
     evicted: Vec<JobId>,
+    /// Scratch for the preemption plan.
+    evictions: Vec<Eviction>,
     /// Dispatches the outbox could not take; flushed first on the next tick.
     overflow: Vec<Dispatch>,
     cycles: u64,
@@ -105,6 +108,7 @@ impl Engine {
             promoted: Vec::with_capacity(64),
             cascade: Vec::with_capacity(64),
             evicted: Vec::with_capacity(64),
+            evictions: Vec::with_capacity(8),
             overflow: Vec::new(),
             cycles: 0,
             demand: Demand::default(),
@@ -178,49 +182,9 @@ impl Engine {
         match command {
             Command::Submit { job, reply } => self.on_submit(job, reply, now),
             Command::Cancel { id, reply } => self.on_cancel(id, reply, now, outbox),
-            Command::Completed { id } => {
-                // `release` returning `None` means the job was not running: a
-                // completion for a cancelled or already-finished job is dropped.
-                if self.release(id).is_some() || self.unhold(id) {
-                    let mut promoted = mem::take(&mut self.promoted);
-                    match self.scheduler.on_completed(
-                        id,
-                        &mut self.jobs,
-                        now,
-                        &self.cycle,
-                        &mut promoted,
-                    ) {
-                        Ok(()) => {
-                            self.record(&Record::Completed { id, at: now });
-                            self.note_terminal(id, now);
-                        }
-                        Err(e) => tracing::warn!(?id, error = %e, "completion rejected"),
-                    }
-                    self.promoted = promoted;
-                }
-            }
-            Command::Failed { id } => {
-                if self.release(id).is_some() || self.unhold(id) {
-                    let mut cascade = mem::take(&mut self.cascade);
-                    match self.scheduler.on_failed(
-                        id,
-                        &mut self.jobs,
-                        now,
-                        &self.cycle,
-                        &mut cascade,
-                    ) {
-                        Ok(()) => {
-                            self.record(&Record::Failed { id, at: now });
-                            self.note_terminal(id, now);
-                            for &cascaded in &cascade {
-                                self.note_terminal(cascaded, now);
-                            }
-                        }
-                        Err(e) => tracing::warn!(?id, error = %e, "failure rejected"),
-                    }
-                    self.cascade = cascade;
-                }
-            }
+            Command::Completed { id } => self.on_completed_report(id, now),
+            Command::Failed { id } => self.on_failed_report(id, now),
+            Command::Preempted { id } => self.on_preempted_report(id, now),
             Command::WorkerJoined {
                 name,
                 capacity,
@@ -350,6 +314,60 @@ impl Engine {
         }
     }
 
+    /// A worker says `id` finished. Dropped if the job was not on a worker.
+    fn on_completed_report(&mut self, id: JobId, now: VirtualTime) {
+        // `release` returning `None` means the job was not running: a
+        // completion for a cancelled or already-finished job is dropped.
+        if self.release(id).is_some() || self.unhold(id) {
+            let mut promoted = mem::take(&mut self.promoted);
+            match self
+                .scheduler
+                .on_completed(id, &mut self.jobs, now, &self.cycle, &mut promoted)
+            {
+                Ok(()) => {
+                    self.record(&Record::Completed { id, at: now });
+                    self.note_terminal(id, now);
+                }
+                Err(e) => tracing::warn!(?id, error = %e, "completion rejected"),
+            }
+            self.promoted = promoted;
+        }
+    }
+
+    /// A worker says `id` failed, timed out, or panicked.
+    fn on_failed_report(&mut self, id: JobId, now: VirtualTime) {
+        if self.release(id).is_some() || self.unhold(id) {
+            let mut cascade = mem::take(&mut self.cascade);
+            match self
+                .scheduler
+                .on_failed(id, &mut self.jobs, now, &self.cycle, &mut cascade)
+            {
+                Ok(()) => {
+                    self.record(&Record::Failed { id, at: now });
+                    self.note_terminal(id, now);
+                    for &cascaded in &cascade {
+                        self.note_terminal(cascaded, now);
+                    }
+                }
+                Err(e) => tracing::warn!(?id, error = %e, "failure rejected"),
+            }
+            self.cascade = cascade;
+        }
+    }
+
+    /// A worker says it stopped the evicted `id`: its capacity is free.
+    fn on_preempted_report(&mut self, id: JobId, now: VirtualTime) {
+        if self.release(id).is_some() || self.unhold(id) {
+            match self
+                .scheduler
+                .on_preempted(id, &mut self.jobs, now, &self.cycle)
+            {
+                Ok(()) => self.record(&Record::Requeued { id, at: now }),
+                Err(e) => tracing::warn!(?id, error = %e, "preemption report rejected"),
+            }
+        }
+    }
+
     /// One scheduling cycle. Flushes overflow first so ordering is preserved.
     pub fn tick(&mut self, now: VirtualTime, outbox: &Outbox) -> CycleOutcome {
         let started = clock::now();
@@ -374,6 +392,9 @@ impl Engine {
             self.on_dispatched(*decision, now, outbox);
         }
         self.decisions = decisions;
+        if let Some(head) = outcome.head {
+            self.plan_evictions(head, now, outbox);
+        }
         self.cycles += 1;
         self.refresh_demand();
         // Label lookups allocate, so account gauges refresh once a second, not every tick.
@@ -537,6 +558,18 @@ impl Engine {
             tracing::info!(held = running.len(), "running jobs await their workers");
         }
         engine.reconciling = running;
+        // A job mid-eviction at the crash is simply requeued; the eviction is re-decided.
+        let evicting: Vec<JobId> = engine
+            .jobs
+            .iter()
+            .filter(|(_, j)| j.state == JobState::Preempted)
+            .map(|(id, _)| id)
+            .collect();
+        for id in evicting {
+            engine
+                .scheduler
+                .requeue(id, &mut engine.jobs, latest, &engine.cycle)?;
+        }
         clock::set_origin(latest.saturating_add(VirtualDuration::from_nanos(1)));
         let snapshot = engine.encode_snapshot(latest);
         if let Some(journal) = engine.journal.as_mut() {
@@ -647,6 +680,10 @@ impl Engine {
                     .requeue(id, &mut self.jobs, at, &self.cycle)?;
                 *latest = (*latest).max(at);
             }
+            Record::Preempted { id, at } => {
+                self.scheduler.preempt(id, &mut self.jobs)?;
+                *latest = (*latest).max(at);
+            }
             Record::Forgotten { id } => {
                 self.jobs.remove(id);
             }
@@ -712,6 +749,44 @@ impl Engine {
                 self.push_dispatch(Dispatch::Kill { slot, id }, outbox);
             }
         }
+    }
+
+    /// Third stage of a cycle: evict lower-class work for a head that could not
+    /// be placed. The worker gets the grace period; capacity frees on its report.
+    fn plan_evictions(&mut self, head: JobId, now: VirtualTime, outbox: &Outbox) {
+        let mut evictions = mem::take(&mut self.evictions);
+        evictions.clear();
+        if let Some(job) = self.jobs.get(head) {
+            plan_preemption(
+                job,
+                &self.running,
+                &self.jobs,
+                &self.inventory,
+                now,
+                &self.cycle.preempt,
+                &mut evictions,
+            );
+        }
+        for e in &evictions {
+            if let Err(err) = self.scheduler.preempt(e.job, &mut self.jobs) {
+                tracing::warn!(victim = ?e.job, error = %err, "eviction skipped");
+                continue;
+            }
+            self.record(&Record::Preempted { id: e.job, at: now });
+            self.metrics.preemptions.inc();
+            tracing::info!(victim = ?e.job, ?head, slot = e.slot, "preempting");
+            let preempt = Dispatch::Preempt {
+                slot: e.slot,
+                id: e.job,
+                grace: self.cycle.preempt.grace,
+            };
+            // Write-ahead, like an assignment: the worker hears it only once it is logged.
+            match self.journal.as_mut() {
+                Some(journal) => journal.hold(preempt),
+                None => self.push_dispatch(preempt, outbox),
+            }
+        }
+        self.evictions = evictions;
     }
 
     /// Requeues and logs, warning instead of failing on an illegal transition.

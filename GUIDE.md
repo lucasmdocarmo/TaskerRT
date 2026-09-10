@@ -153,8 +153,9 @@ is killed on its worker.
 ### Job states
 
 `Submitted → Blocked | Ready → Running → Completed | Failed | Cancelled`.
-`Preempted` is the transient state a running job passes through when its worker
-disappears; the job is then `Ready` again and runs elsewhere.
+`Preempted` is a running job being evicted: its worker lost the daemon, or a
+higher-class job needed its capacity (section 8b). It returns to `Ready` and
+runs again from the start, unless it manages to finish inside its grace.
 
 ## 6. Watching it
 
@@ -280,6 +281,28 @@ named as a dependency within that window.
 The cost is one disk sync per scheduler tick, shared by every submit in that
 tick. Semantics to know: a completion lost in a crash makes the job run again,
 and a client whose acknowledgement was lost may resubmit and create a duplicate.
+
+## 8b. Preemption
+
+When a job cannot be placed and its class is at or above `--preempt-min-class`
+(default `urgent`), the daemon evicts strictly lower-class running jobs on one
+slot until it fits: lowest class first, youngest first, fewest victims. Each
+victim's worker receives a stop request with `--preempt-grace-secs` (default 5)
+to finish or exit; a command gets SIGTERM, then SIGKILL at the deadline. The
+victim is requeued and reruns later; after `--preempt-max` evictions (default 3)
+it becomes immune. Two `Low` jobs and one `Urgent` job show it:
+
+```bash
+cargo run -q -p tasker-cli -- submit --sleep 30000 --cpu-millis 4000 --class low
+```
+
+```bash
+cargo run -q -p tasker-cli -- submit --sleep 500 --cpu-millis 4000 --class urgent
+```
+
+The daemon logs `preempting victim=… head=…`, `status` shows the low job
+`Preempted` and then `Ready`, the urgent job runs, and the low job starts
+over. `tasker_preemptions_total` counts evictions.
 
 ## 9. Kubernetes
 
@@ -413,9 +436,12 @@ accounts get under equal and 3:1 shares.
 | `--half-life-secs` | `3600` |
 | `--shares` | none; `account=shares,...` |
 | `--data-dir` | none (in memory) |
-| `--wal-sync` | `data` (`full`, `data`, `none`) |
+| `--wal-sync` | `data` (`full`, `data`, `none`); the log format is `02` since M7, and M6 directories are refused |
 | `--wal-rotate-bytes` | `67108864` |
 | `--retain-secs` | `300` |
+| `--preempt-min-class` | `urgent` (`off`, `low`, `normal`, `high`, `urgent`) |
+| `--preempt-max` | `3` |
+| `--preempt-grace-secs` | `5` |
 
 ### `tasker-worker`
 

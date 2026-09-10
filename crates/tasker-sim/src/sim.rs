@@ -4,8 +4,8 @@
 use std::mem;
 
 use tasker_core::{
-    Arena, CycleConfig, DispatchDecision, Job, JobId, JobState, LifecycleError, RunningJob,
-    Scheduler, SlotInventory, VirtualDuration, VirtualTime,
+    Arena, CycleConfig, DispatchDecision, Eviction, Job, JobId, JobState, LifecycleError,
+    RunningJob, Scheduler, SlotInventory, VirtualDuration, VirtualTime, plan_preemption,
 };
 
 use crate::invariants::{self, Violation};
@@ -29,6 +29,7 @@ pub struct StepReport {
     pub events_applied: usize,
     pub dispatched: usize,
     pub backfilled: usize,
+    pub preempted: usize,
 }
 
 /// A complete simulated system. Public fields are read by the invariant
@@ -49,6 +50,9 @@ pub struct Simulation {
     outcomes: Vec<Option<Outcome>>,
     trace: Trace,
     decisions: Vec<DispatchDecision>,
+    /// Dispatch count per job index; completion events carry the run they belong to.
+    runs: Vec<u32>,
+    evictions: Vec<Eviction>,
     promoted: Vec<JobId>,
     cascade: Vec<JobId>,
     /// Run `invariants::check` after every event and every cycle.
@@ -72,6 +76,8 @@ impl Simulation {
             outcomes: Vec::new(),
             trace: Trace::new(),
             decisions: Vec::new(),
+            runs: Vec::new(),
+            evictions: Vec::new(),
             promoted: Vec::new(),
             cascade: Vec::new(),
             check_invariants: false,
@@ -161,6 +167,36 @@ impl Simulation {
         }
         self.decisions = decisions;
 
+        // Preemption: only when the cycle left a head job unplaced.
+        if let Some(head) = outcome.head {
+            let mut evictions = mem::take(&mut self.evictions);
+            evictions.clear();
+            if let Some(job) = self.jobs.get(head) {
+                plan_preemption(
+                    job,
+                    &self.running,
+                    &self.jobs,
+                    &self.inventory,
+                    at,
+                    &self.config.preempt,
+                    &mut evictions,
+                );
+            }
+            for e in &evictions {
+                if self.scheduler.preempt(e.job, &mut self.jobs).is_ok() {
+                    let run = self.runs.get(e.job.index() as usize).copied().unwrap_or(0);
+                    self.record(at, Some(e.job), Action::Preempted);
+                    // The worker gets the grace period; then the eviction is confirmed.
+                    self.queue.push(
+                        at.saturating_add(self.config.preempt.grace),
+                        Event::Preempted { job: e.job, run },
+                    );
+                    report.preempted += 1;
+                }
+            }
+            self.evictions = evictions;
+        }
+
         if self.check_invariants {
             invariants::check(self)?;
         }
@@ -197,6 +233,15 @@ impl Simulation {
     }
 
     /// Returns a running job's capacity to its slot and drops it from the set.
+    /// True when `run` is the job's latest dispatch and it still occupies a slot.
+    fn current_run(&self, id: JobId, run: u32) -> bool {
+        let on_slot = self
+            .jobs
+            .get(id)
+            .is_some_and(|j| matches!(j.state, JobState::Running | JobState::Preempted));
+        on_slot && self.runs.get(id.index() as usize).copied() == Some(run)
+    }
+
     fn release(&mut self, id: JobId) {
         if let Some(pos) = self.running.iter().position(|r| r.job == id) {
             // `swap_remove` is O(1); order in `running` is not significant.
@@ -228,11 +273,20 @@ impl Simulation {
             .copied()
             .flatten()
             .unwrap_or(Outcome::Completes { after: walltime });
+        let index = d.job.index() as usize;
+        if self.runs.len() <= index {
+            self.runs.resize(index + 1, 0);
+        }
+        self.runs[index] += 1;
+        let run = self.runs[index];
+        let job = d.job;
         let (event, after) = match outcome {
-            Outcome::Completes { after } if after <= walltime => (Event::Complete(d.job), after),
+            Outcome::Completes { after } if after <= walltime => {
+                (Event::Complete { job, run }, after)
+            }
             // Past the walltime the worker kills it: a failure at the limit.
-            Outcome::Completes { .. } => (Event::Fail(d.job), walltime),
-            Outcome::Fails { after } => (Event::Fail(d.job), after.min(walltime)),
+            Outcome::Completes { .. } => (Event::Fail { job, run }, walltime),
+            Outcome::Fails { after } => (Event::Fail { job, run }, after.min(walltime)),
         };
         self.queue.push(at.saturating_add(after), event);
     }
@@ -264,13 +318,9 @@ impl Simulation {
                     .submit(id, &mut self.jobs, now, &self.config)?;
                 self.record(now, Some(id), Action::Submitted { state });
             }
-            Event::Complete(id) => {
-                // A job cancelled while running still has its fate queued; skip it.
-                if self
-                    .jobs
-                    .get(id)
-                    .is_none_or(|j| j.state != JobState::Running)
-                {
+            Event::Complete { job: id, run } => {
+                // Cancelled, or a run that was preempted: the fate no longer applies.
+                if !self.current_run(id, run) {
                     return Ok(());
                 }
                 self.release(id);
@@ -288,12 +338,8 @@ impl Simulation {
                 }
                 self.promoted = promoted;
             }
-            Event::Fail(id) => {
-                if self
-                    .jobs
-                    .get(id)
-                    .is_none_or(|j| j.state != JobState::Running)
-                {
+            Event::Fail { job: id, run } => {
+                if !self.current_run(id, run) {
                     return Ok(());
                 }
                 self.release(id);
@@ -305,6 +351,20 @@ impl Simulation {
                     self.record(now, Some(*c), Action::Cancelled);
                 }
                 self.cascade = cascade;
+            }
+            Event::Preempted { job: id, run } => {
+                // Finished inside its grace, or cancelled: nothing to confirm.
+                let evicting = self
+                    .jobs
+                    .get(id)
+                    .is_some_and(|j| j.state == JobState::Preempted);
+                if !evicting || !self.current_run(id, run) {
+                    return Ok(());
+                }
+                self.release(id);
+                self.scheduler
+                    .on_preempted(id, &mut self.jobs, now, &self.config)?;
+                self.record(now, Some(id), Action::Requeued);
             }
             Event::Cancel { submit_index } => {
                 let Some(&id) = self.handles.get(submit_index) else {

@@ -15,6 +15,7 @@ fn sample_job() -> Job {
     j.deps.push(JobId::from_bits(5));
     j.deps.push(JobId::from_bits(1 << 40));
     j.payload = Bytes::from_static(b"hello");
+    j.preemptions = 2;
     j
 }
 
@@ -33,6 +34,7 @@ fn every_record_kind_round_trips() {
         Record::Cancelled { id, at },
         Record::Requeued { id, at },
         Record::Forgotten { id },
+        Record::Preempted { id, at },
     ];
     let mut buf = LOG_MAGIC.to_vec();
     for r in &records {

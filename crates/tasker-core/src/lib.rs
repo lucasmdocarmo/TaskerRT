@@ -18,8 +18,9 @@ pub use domain::{
 pub use engine::{CycleConfig, CycleOutcome, LifecycleError, Scheduler};
 pub use policy::{
     AccountError, BackfillOutcome, BackfillScratch, DECAY_ONE, DECAY_STEPS, DependencyError,
-    DependencyTracker, DispatchDecision, Disposition, FACTOR_SCALE, FairShare, FairShareConfig,
-    Ledger, MAX_ACCOUNTS, OrderKey, PackBudget, PackOutcome, PriorityConfig, PriorityHeap,
-    PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob, Score, USAGE_PER_CORE_SECOND,
-    Usage, decay_factor, easy_backfill, pack, reservation_time, score,
+    DependencyTracker, DispatchDecision, Disposition, Eviction, FACTOR_SCALE, FairShare,
+    FairShareConfig, Ledger, MAX_ACCOUNTS, OrderKey, PackBudget, PackOutcome, PreemptConfig,
+    PriorityConfig, PriorityHeap, PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob,
+    Score, USAGE_PER_CORE_SECOND, Usage, decay_factor, easy_backfill, pack, plan_preemption,
+    reservation_time, score,
 };

@@ -17,6 +17,7 @@ pub enum Record {
     Cancelled { id: JobId, at: VirtualTime },
     Requeued { id: JobId, at: VirtualTime },
     Forgotten { id: JobId },
+    Preempted { id: JobId, at: VirtualTime },
 }
 
 const SUBMITTED: u8 = 1;
@@ -26,6 +27,7 @@ const FAILED: u8 = 4;
 const CANCELLED: u8 = 5;
 const REQUEUED: u8 = 6;
 const FORGOTTEN: u8 = 7;
+const PREEMPTED: u8 = 8;
 
 /// Frame header: payload length, then CRC-32 of the payload.
 pub const FRAME_HEADER: usize = 8;
@@ -76,6 +78,7 @@ impl Record {
                 put_u8(b, FORGOTTEN);
                 put_u64(b, id.to_bits());
             }
+            Self::Preempted { id, at } => put_event(b, PREEMPTED, *id, *at),
         });
     }
 
@@ -85,7 +88,7 @@ impl Record {
     /// `CodecError` when the payload is short or carries an unknown tag.
     pub fn decode(payload: &[u8]) -> Result<Self, CodecError> {
         let mut c = Cursor::new(payload);
-        let kind = c.tag(FORGOTTEN)?;
+        let kind = c.tag(PREEMPTED)?;
         let id = JobId::from_bits(c.u64()?);
         Ok(match kind {
             SUBMITTED => Self::Submitted {
@@ -102,6 +105,7 @@ impl Record {
                     FAILED => Self::Failed { id, at },
                     CANCELLED => Self::Cancelled { id, at },
                     REQUEUED => Self::Requeued { id, at },
+                    PREEMPTED => Self::Preempted { id, at },
                     tag => return Err(CodecError::BadTag { tag, at: 0 }),
                 }
             }
@@ -118,6 +122,7 @@ impl Record {
             | Self::Failed { id, .. }
             | Self::Cancelled { id, .. }
             | Self::Requeued { id, .. }
+            | Self::Preempted { id, .. }
             | Self::Forgotten { id } => *id,
         }
     }
@@ -131,7 +136,7 @@ fn state_tag(state: JobState) -> u8 {
     u8::try_from(index).expect("fewer than 256 states")
 }
 
-/// Job layout: account, class, submit time, request, walltime, deps, payload, state.
+/// Job layout: account, class, submit time, request, walltime, deps, payload, state, evictions.
 pub(crate) fn put_job(b: &mut Vec<u8>, job: &Job) {
     put_u32(b, job.account.get());
     put_u8(b, job.priority_class.ordinal());
@@ -149,6 +154,7 @@ pub(crate) fn put_job(b: &mut Vec<u8>, job: &Job) {
     }
     put_bytes(b, &job.payload);
     put_u8(b, state_tag(job.state));
+    put_u8(b, job.preemptions);
 }
 
 pub(crate) fn get_job(c: &mut Cursor<'_>) -> Result<Job, CodecError> {
@@ -189,5 +195,6 @@ pub(crate) fn get_job(c: &mut Cursor<'_>) -> Result<Job, CodecError> {
             tag: state_tag,
             at: state_at,
         })?;
+    job.preemptions = c.u8()?;
     Ok(job)
 }

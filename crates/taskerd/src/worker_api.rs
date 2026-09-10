@@ -101,11 +101,10 @@ impl v1::worker_api_server::WorkerApi for WorkerService {
                 match msg.body {
                     Some(Up::Finished(f)) => {
                         let id = JobId::from_bits(f.job_id);
-                        let ok = f.result == v1::TaskResult::Succeeded as i32;
-                        let command = if ok {
-                            Command::Completed { id }
-                        } else {
-                            Command::Failed { id }
+                        let command = match v1::TaskResult::try_from(f.result) {
+                            Ok(v1::TaskResult::Succeeded) => Command::Completed { id },
+                            Ok(v1::TaskResult::Preempted) => Command::Preempted { id },
+                            _ => Command::Failed { id },
                         };
                         if inbox.push_with_retry(command, 1_000).await.is_err() {
                             tracing::error!("inbox saturated; task report dropped");

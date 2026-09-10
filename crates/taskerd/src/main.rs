@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use tasker_core::{CycleConfig, FairShareConfig, VirtualDuration};
+use tasker_core::{CycleConfig, FairShareConfig, PreemptConfig, PriorityClass, VirtualDuration};
 use tasker_wal::SyncPolicy;
 use taskerd::{Daemon, DaemonConfig};
 use tokio::net::TcpListener;
@@ -46,6 +46,28 @@ struct Args {
     /// Forget terminal jobs this many seconds after they finish.
     #[arg(long, default_value_t = 300)]
     retain_secs: u64,
+    /// Lowest class that may evict lower-class running jobs: off, low, normal, high, urgent.
+    #[arg(long, default_value = "urgent", value_parser = parse_class)]
+    preempt_min_class: Option<PriorityClass>,
+    /// Evictions after which a job becomes immune.
+    #[arg(long, default_value_t = 3)]
+    preempt_max: u8,
+    /// Seconds an evicted task gets to stop before it is killed.
+    #[arg(long, default_value_t = 5)]
+    preempt_grace_secs: u64,
+}
+
+fn parse_class(s: &str) -> Result<Option<PriorityClass>, String> {
+    Ok(match s {
+        "off" => None,
+        "low" => Some(PriorityClass::Low),
+        "normal" => Some(PriorityClass::Normal),
+        "high" => Some(PriorityClass::High),
+        "urgent" => Some(PriorityClass::Urgent),
+        other => Err(format!(
+            "unknown class {other:?}: off|low|normal|high|urgent"
+        ))?,
+    })
 }
 
 fn parse_sync(s: &str) -> Result<SyncPolicy, String> {
@@ -99,6 +121,11 @@ async fn main() -> anyhow::Result<()> {
         retain: Duration::from_secs(args.retain_secs),
         cycle: CycleConfig {
             fairshare: FairShareConfig::new(VirtualDuration::from_secs(args.half_life_secs)),
+            preempt: PreemptConfig {
+                min_class: args.preempt_min_class,
+                max_preemptions: args.preempt_max,
+                grace: VirtualDuration::from_secs(args.preempt_grace_secs),
+            },
             ..defaults.cycle
         },
         ..defaults

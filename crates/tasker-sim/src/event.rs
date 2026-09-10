@@ -22,10 +22,22 @@ pub enum Event {
     Cancel {
         submit_index: usize,
     },
-    /// Scheduled internally when a job is dispatched.
-    Complete(JobId),
-    /// Scheduled internally when a job is dispatched.
-    Fail(JobId),
+    /// Scheduled when a job is dispatched; `run` says which dispatch, so a
+    /// completion left over from a run that was preempted is ignored.
+    Complete {
+        job: JobId,
+        run: u32,
+    },
+    /// Scheduled when a job is dispatched; see `Complete`.
+    Fail {
+        job: JobId,
+        run: u32,
+    },
+    /// Scheduled at eviction time, one grace period out.
+    Preempted {
+        job: JobId,
+        run: u32,
+    },
 }
 
 /// Heap entry. Ordered by `(at, seq)` only; the event itself is payload.

@@ -34,6 +34,8 @@ enum TaskResult {
   TASK_RESULT_FAILED = 2;
   TASK_RESULT_TIMED_OUT = 3;
   TASK_RESULT_PANICKED = 4;
+  // Stopped on request: the daemon evicted it for a higher-class job.
+  TASK_RESULT_PREEMPTED = 5;
 }
 
 message TaskFinished {
@@ -46,6 +48,7 @@ message DaemonMessage {
     Welcome welcome = 1;
     Assign assign = 2;
     Kill kill = 3;
+    Preempt preempt = 4;
   }
 }
 
@@ -58,3 +61,9 @@ message Assign {
 }
 
 message Kill { uint64 job_id = 1; }
+
+// Stop this task cooperatively; after grace_nanos the worker kills it.
+message Preempt {
+  uint64 job_id = 1;
+  uint64 grace_nanos = 2;
+}

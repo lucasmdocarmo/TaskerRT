@@ -3,8 +3,8 @@
 
 use proptest::prelude::*;
 use tasker_core::{
-    CycleConfig, FairShareConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest,
-    Resources, SlotInventory, VirtualDuration,
+    CycleConfig, FairShareConfig, PackBudget, PreemptConfig, PriorityConfig, PriorityWeights,
+    ResourceRequest, Resources, SlotInventory, VirtualDuration,
 };
 use tasker_sim::{ScenarioParams, Shape, Simulation, generate};
 
@@ -16,6 +16,7 @@ fn config() -> CycleConfig {
             ResourceRequest::new(8_000, 0, 0),
         ),
         fairshare: FairShareConfig::default(),
+        preempt: PreemptConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 256,
     }

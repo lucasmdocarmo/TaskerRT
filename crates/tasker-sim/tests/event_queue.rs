@@ -8,12 +8,30 @@ fn t(secs: u64) -> VirtualTime {
 #[test]
 fn events_pop_in_time_order_regardless_of_push_order() {
     let mut q = EventQueue::new();
-    q.push(t(30), Event::Complete(JobId::from_bits(3)));
-    q.push(t(10), Event::Complete(JobId::from_bits(1)));
-    q.push(t(20), Event::Complete(JobId::from_bits(2)));
+    q.push(
+        t(30),
+        Event::Complete {
+            job: JobId::from_bits(3),
+            run: 0,
+        },
+    );
+    q.push(
+        t(10),
+        Event::Complete {
+            job: JobId::from_bits(1),
+            run: 0,
+        },
+    );
+    q.push(
+        t(20),
+        Event::Complete {
+            job: JobId::from_bits(2),
+            run: 0,
+        },
+    );
 
     let mut order = Vec::new();
-    while let Some((at, Event::Complete(id))) = q.pop_due(t(100)) {
+    while let Some((at, Event::Complete { job: id, .. })) = q.pop_due(t(100)) {
         order.push((at, id.to_bits()));
     }
     assert_eq!(order, vec![(t(10), 1), (t(20), 2), (t(30), 3)]);
@@ -23,10 +41,16 @@ fn events_pop_in_time_order_regardless_of_push_order() {
 fn same_instant_events_pop_in_insertion_order() {
     let mut q = EventQueue::new();
     for n in 0..5_u64 {
-        q.push(t(7), Event::Complete(JobId::from_bits(n)));
+        q.push(
+            t(7),
+            Event::Complete {
+                job: JobId::from_bits(n),
+                run: 0,
+            },
+        );
     }
     let mut order = Vec::new();
-    while let Some((_, Event::Complete(id))) = q.pop_due(t(7)) {
+    while let Some((_, Event::Complete { job: id, .. })) = q.pop_due(t(7)) {
         order.push(id.to_bits());
     }
     assert_eq!(order, vec![0, 1, 2, 3, 4], "sequence number breaks the tie");
@@ -35,8 +59,20 @@ fn same_instant_events_pop_in_insertion_order() {
 #[test]
 fn pop_due_leaves_future_events_in_place() {
     let mut q = EventQueue::new();
-    q.push(t(5), Event::Complete(JobId::from_bits(0)));
-    q.push(t(15), Event::Complete(JobId::from_bits(1)));
+    q.push(
+        t(5),
+        Event::Complete {
+            job: JobId::from_bits(0),
+            run: 0,
+        },
+    );
+    q.push(
+        t(15),
+        Event::Complete {
+            job: JobId::from_bits(1),
+            run: 0,
+        },
+    );
     assert!(q.pop_due(t(10)).is_some());
     assert!(q.pop_due(t(10)).is_none(), "t=15 is not yet due");
     assert_eq!(q.len(), 1);

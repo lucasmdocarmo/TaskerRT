@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use tasker_core::{
-    CycleConfig, FairShareConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest,
-    VirtualDuration,
+    CycleConfig, FairShareConfig, PackBudget, PreemptConfig, PriorityClass, PriorityConfig,
+    PriorityWeights, ResourceRequest, VirtualDuration,
 };
 use tasker_wal::SyncPolicy;
 
@@ -67,6 +67,10 @@ impl Default for DaemonConfig {
                     ResourceRequest::new(u32::MAX, u64::MAX, u8::MAX),
                 ),
                 fairshare: FairShareConfig::new(VirtualDuration::from_secs(3_600)),
+                preempt: PreemptConfig {
+                    min_class: Some(PriorityClass::Urgent),
+                    ..PreemptConfig::default()
+                },
                 budget: PackBudget::default(),
                 max_candidates: 10_000,
             },

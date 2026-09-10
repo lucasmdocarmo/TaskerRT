@@ -5,6 +5,7 @@ pub mod backfill;
 pub mod eligibility;
 pub mod fairshare;
 pub mod pack;
+pub mod preempt;
 pub mod priority;
 pub mod ready_set;
 
@@ -15,5 +16,6 @@ pub use fairshare::{
     USAGE_PER_CORE_SECOND, Usage, decay_factor,
 };
 pub use pack::{DispatchDecision, Disposition, PackBudget, PackOutcome, pack};
+pub use preempt::{Eviction, PreemptConfig, plan_preemption};
 pub use priority::{FACTOR_SCALE, OrderKey, PriorityConfig, PriorityWeights, Score, score};
 pub use ready_set::{PriorityHeap, ReadyEntry, ReadySet};

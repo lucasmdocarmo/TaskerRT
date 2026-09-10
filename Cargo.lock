@@ -1539,6 +1539,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "libc",
  "tasker-core",
  "tasker-proto",
  "taskerd",

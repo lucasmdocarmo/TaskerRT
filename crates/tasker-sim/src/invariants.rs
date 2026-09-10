@@ -33,7 +33,8 @@ pub fn check(sim: &Simulation) -> Result<(), Violation> {
 
     for (id, job) in sim.jobs.iter() {
         match job.state {
-            JobState::Running => {
+            // A job in its eviction grace still occupies its slot.
+            JobState::Running | JobState::Preempted => {
                 running_jobs += 1;
                 for dep in &job.deps {
                     let done = sim
@@ -74,7 +75,7 @@ pub fn check(sim: &Simulation) -> Result<(), Violation> {
     let consistent = sim.running.iter().all(|r| {
         sim.jobs
             .get(r.job)
-            .is_some_and(|j| j.state == JobState::Running)
+            .is_some_and(|j| matches!(j.state, JobState::Running | JobState::Preempted))
     });
     if running_set != running_jobs || !consistent {
         return Err(Violation::RunningSetMismatch {

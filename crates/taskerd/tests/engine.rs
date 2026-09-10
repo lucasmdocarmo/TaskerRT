@@ -100,7 +100,7 @@ fn a_submit_is_dispatched_to_an_attached_worker_with_its_payload() {
             assert_eq!(&payload[..], b"payload");
             assert_eq!(walltime, VirtualDuration::from_secs(60));
         }
-        Dispatch::Kill { .. } => panic!("expected Assign"),
+        Dispatch::Kill { .. } | Dispatch::Preempt { .. } => panic!("expected Assign"),
     }
     assert_eq!(status(&mut r, id), Some(JobState::Running));
 }

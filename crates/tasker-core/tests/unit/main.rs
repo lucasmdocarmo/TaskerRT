@@ -8,6 +8,7 @@ mod eligibility;
 mod fairshare;
 mod job;
 mod pack;
+mod preempt;
 mod priority;
 mod ready_set;
 mod resource;

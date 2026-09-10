@@ -7,7 +7,7 @@ use crate::codec::{Cursor, put_opt_u32, put_u8, put_u32, put_u64};
 use crate::record::{get_job, put_job};
 
 /// First eight bytes of every snapshot file.
-pub const SNAPSHOT_MAGIC: &[u8; 8] = b"TKRSNP01";
+pub const SNAPSHOT_MAGIC: &[u8; 8] = b"TKRSNP02";
 
 /// A decoded snapshot.
 #[derive(Debug)]

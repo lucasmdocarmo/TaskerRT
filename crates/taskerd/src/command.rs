@@ -28,6 +28,10 @@ pub enum Command {
     Failed {
         id: JobId,
     },
+    /// The worker stopped an evicted task; its capacity is free.
+    Preempted {
+        id: JobId,
+    },
     WorkerJoined {
         name: String,
         capacity: Capacity,
@@ -119,6 +123,12 @@ pub enum Dispatch {
         slot: SlotIndex,
         id: JobId,
     },
+    /// Stop cooperatively, then kill after `grace`.
+    Preempt {
+        slot: SlotIndex,
+        id: JobId,
+        grace: VirtualDuration,
+    },
 }
 
 // Reply channels are not `Debug`; name the variant only.
@@ -129,6 +139,7 @@ impl fmt::Debug for Command {
             Self::Cancel { .. } => "Cancel",
             Self::Completed { .. } => "Completed",
             Self::Failed { .. } => "Failed",
+            Self::Preempted { .. } => "Preempted",
             Self::WorkerJoined { .. } => "WorkerJoined",
             Self::WorkerLeft { .. } => "WorkerLeft",
             Self::WorkerDraining { .. } => "WorkerDraining",

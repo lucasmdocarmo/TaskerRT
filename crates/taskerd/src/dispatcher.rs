@@ -54,6 +54,13 @@ async fn deliver(dispatch: Dispatch, registry: &Registry, inbox: &Inbox) {
                 job_id: id.to_bits(),
             }),
         ),
+        Dispatch::Preempt { slot, id, grace } => (
+            slot,
+            Body::Preempt(v1::Preempt {
+                job_id: id.to_bits(),
+                grace_nanos: grace.as_nanos(),
+            }),
+        ),
     };
     let Some(tx) = registry.sender(slot) else {
         tracing::warn!(slot, "dispatch to a slot with no attached worker");

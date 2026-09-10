@@ -7,11 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use tasker_core::Resources;
+use tasker_core::{CycleConfig, PreemptConfig, PriorityClass, Resources, VirtualDuration};
 use tasker_proto::v1;
 use tasker_proto::v1::control_api_client::ControlApiClient;
 use tasker_wal::SyncPolicy;
-use tasker_worker::{SleepExecutor, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload};
+use tasker_worker::{
+    SleepExecutor, Stop, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload,
+};
 use taskerd::{Daemon, DaemonConfig, DaemonError};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -55,6 +57,15 @@ async fn start_with(data_dir: Option<PathBuf>, addr: Option<SocketAddr>) -> Rig 
         heartbeat_timeout: Duration::from_millis(500),
         data_dir,
         wal_sync: SyncPolicy::None,
+        // Urgent evicts; a short grace keeps the preemption test quick.
+        cycle: CycleConfig {
+            preempt: PreemptConfig {
+                min_class: Some(PriorityClass::Urgent),
+                max_preemptions: 3,
+                grace: VirtualDuration::from_nanos(500_000_000),
+            },
+            ..DaemonConfig::default().cycle
+        },
         ..DaemonConfig::default()
     };
     let daemon = tokio::spawn(Daemon::new(config).serve(listener, async {
@@ -119,11 +130,22 @@ impl Rig {
     }
 
     async fn submit(&mut self, cpu: u32, sleep: Duration, deps: Vec<u64>) -> (u64, v1::JobState) {
+        self.submit_class(cpu, sleep, deps, v1::PriorityClass::Normal)
+            .await
+    }
+
+    async fn submit_class(
+        &mut self,
+        cpu: u32,
+        sleep: Duration,
+        deps: Vec<u64>,
+        class: v1::PriorityClass,
+    ) -> (u64, v1::JobState) {
         let resp = self
             .client
             .submit(v1::SubmitRequest {
                 account: 1,
-                priority_class: v1::PriorityClass::Normal as i32,
+                priority_class: class as i32,
                 request: Some(v1::Resources {
                     cpu_millis: cpu,
                     mem_bytes: 0,
@@ -326,10 +348,10 @@ async fn accounts_report_usage_for_the_account_that_ran() {
 struct Counting(Arc<AtomicUsize>);
 
 impl TaskExecutor for Counting {
-    async fn run(&self, payload: Bytes) -> Result<(), TaskError> {
+    async fn run(&self, payload: Bytes, stop: Stop) -> Result<(), TaskError> {
         // Relaxed: the test reads the total only after every task has finished.
         self.0.fetch_add(1, Ordering::Relaxed);
-        SleepExecutor.run(payload).await
+        SleepExecutor.run(payload, stop).await
     }
 }
 
@@ -364,5 +386,45 @@ async fn a_restarted_daemon_reclaims_work_its_worker_kept_running() {
         .await;
     // done, long, after: three executions. A rerun of `long` would make four.
     assert_eq!(runs.load(Ordering::Relaxed), 3, "long ran exactly once");
+    rig.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_urgent_job_preempts_a_running_low_job_which_reruns() {
+    let mut rig = start().await;
+    let _w = rig.worker("w1", 4_000);
+    rig.wait_attached(1).await;
+    // A Low job takes the whole worker for three seconds.
+    let (low, _) = rig
+        .submit_class(
+            4_000,
+            Duration::from_secs(3),
+            vec![],
+            v1::PriorityClass::Low,
+        )
+        .await;
+    rig.wait_state(low, v1::JobState::Running, Duration::from_secs(3))
+        .await;
+    // An Urgent job that needs the whole worker cannot wait; the Low one is evicted.
+    let (urgent, _) = rig
+        .submit_class(
+            4_000,
+            Duration::from_millis(300),
+            vec![],
+            v1::PriorityClass::Urgent,
+        )
+        .await;
+    rig.wait_state(urgent, v1::JobState::Running, Duration::from_secs(3))
+        .await;
+    assert_ne!(
+        rig.state(low).await,
+        v1::JobState::Running,
+        "the slot is the urgent job's now"
+    );
+    rig.wait_state(urgent, v1::JobState::Completed, Duration::from_secs(3))
+        .await;
+    // The victim reruns from the start and finishes.
+    rig.wait_state(low, v1::JobState::Completed, Duration::from_secs(6))
+        .await;
     rig.shutdown().await;
 }

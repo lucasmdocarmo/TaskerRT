@@ -8,7 +8,7 @@ SIGTERM, a CLI, an open-loop load generator, and Kubernetes manifests where
 KEDA reads the scheduler's own demand signal to scale the worker pool.
 Delivered so far: M1 scheduler core, M2 DAG dependencies and simulation,
 M3 execution, M4 Kubernetes and autoscaling, M5 fair-share, M6 durability
-with worker reconciliation. Remaining: preemption, latency hardening.
+with worker reconciliation, M7 preemption. Remaining: latency hardening.
 
 **New here?** [GUIDE.md](GUIDE.md) walks through building, running, submitting
 jobs, watching them, fair-share, durability, the Kubernetes deployment, and
@@ -114,6 +114,14 @@ falling toward 0 beyond that. Shares come from `--shares 0=3,1=1`; unlisted
 accounts weigh 1. The arithmetic is integer-only (a compile-time Q48 table of
 `2^(-k/1024)`), so the simulator's determinism guarantee covers it.
 `tasker accounts` and the `tasker_account_*` gauges show the ledgers.
+
+### Preemption
+
+A job that cannot be placed and is at or above `--preempt-min-class` (default
+`urgent`) evicts strictly lower-class running jobs on one slot: lowest class
+first, youngest first, fewest victims. Workers stop tasks cooperatively within
+`--preempt-grace-secs`; victims requeue and become immune after `--preempt-max`
+evictions. No new plan is made while an eviction is in flight.
 
 ### Durability
 

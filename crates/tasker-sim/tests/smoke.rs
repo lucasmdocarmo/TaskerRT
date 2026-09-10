@@ -1,8 +1,8 @@
 use smallvec::smallvec;
 use tasker_core::{
-    AccountId, CycleConfig, FairShareConfig, Job, JobState, PackBudget, PriorityClass,
-    PriorityConfig, PriorityWeights, ResourceRequest, Resources, SlotInventory, VirtualDuration,
-    VirtualTime,
+    AccountId, CycleConfig, FairShareConfig, Job, JobState, PackBudget, PreemptConfig,
+    PriorityClass, PriorityConfig, PriorityWeights, ResourceRequest, Resources, SlotInventory,
+    VirtualDuration, VirtualTime,
 };
 use tasker_sim::{Action, Event, Outcome, Simulation};
 
@@ -20,6 +20,7 @@ fn config() -> CycleConfig {
             ResourceRequest::new(4_000, 0, 0),
         ),
         fairshare: FairShareConfig::default(),
+        preempt: PreemptConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 64,
     }

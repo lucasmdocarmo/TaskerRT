@@ -16,6 +16,10 @@ pub enum Action {
     Failed,
     Cancelled,
     Promoted,
+    /// Chosen as a victim; its worker has the grace period to stop it.
+    Preempted,
+    /// The eviction was confirmed and the job is Ready again.
+    Requeued,
     Cycle {
         dispatched: usize,
         backfilled: usize,

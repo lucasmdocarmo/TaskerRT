@@ -9,7 +9,8 @@ use crate::domain::{
 use crate::policy::{
     AccountError, BackfillScratch, DependencyError, DependencyTracker, DispatchDecision,
     Disposition, FairShare, FairShareConfig, Ledger, MAX_ACCOUNTS, OrderKey, PackBudget,
-    PriorityConfig, Readiness, ReadyEntry, ReadySet, RunningJob, easy_backfill, pack, score,
+    PreemptConfig, PriorityConfig, Readiness, ReadyEntry, ReadySet, RunningJob, easy_backfill,
+    pack, score,
 };
 
 /// Everything a cycle needs that is not per-job state.
@@ -17,6 +18,7 @@ use crate::policy::{
 pub struct CycleConfig {
     pub priority: PriorityConfig,
     pub fairshare: FairShareConfig,
+    pub preempt: PreemptConfig,
     pub budget: PackBudget,
     /// Upper bound on jobs examined per cycle.
     pub max_candidates: usize,
@@ -143,6 +145,40 @@ impl Scheduler {
         self.fairshare
             .on_dispatch(job.account, job.request.cpu_millis, now, &config.fairshare);
         Ok(())
+    }
+
+    /// Marks a running job as being evicted. Its cpu stays charged and its
+    /// capacity stays allocated until the worker reports that it stopped.
+    ///
+    /// # Errors
+    /// `UnknownJob`, or `Transition` if `id` was not `Running`.
+    pub fn preempt(&mut self, id: JobId, jobs: &mut Arena<Job>) -> Result<(), LifecycleError> {
+        let job = jobs.get_mut(id).ok_or(LifecycleError::UnknownJob(id))?;
+        job.try_transition(JobState::Preempted)?;
+        Ok(())
+    }
+
+    /// The worker confirmed the eviction: release the account, count it, requeue.
+    ///
+    /// # Errors
+    /// `UnknownJob`, or `Transition` if `id` was not `Preempted`.
+    pub fn on_preempted(
+        &mut self,
+        id: JobId,
+        jobs: &mut Arena<Job>,
+        now: VirtualTime,
+        config: &CycleConfig,
+    ) -> Result<(), LifecycleError> {
+        let job = jobs.get_mut(id).ok_or(LifecycleError::UnknownJob(id))?;
+        if job.state != JobState::Preempted {
+            return Err(TransitionError {
+                from: job.state,
+                to: JobState::Ready,
+            }
+            .into());
+        }
+        job.preemptions = job.preemptions.saturating_add(1);
+        self.requeue(id, jobs, now, config)
     }
 
     /// Replaces every fair-share ledger with a snapshot's.
@@ -281,7 +317,7 @@ impl Scheduler {
         if job.state == JobState::Ready {
             self.ready.remove(job.priority_class, id);
         }
-        let was_running = job.state == JobState::Running;
+        let was_running = matches!(job.state, JobState::Running | JobState::Preempted);
         job.try_transition(JobState::Cancelled)?;
         if was_running {
             self.fairshare
@@ -307,12 +343,14 @@ impl Scheduler {
         config: &CycleConfig,
     ) -> Result<(), LifecycleError> {
         let job = jobs.get_mut(id).ok_or(LifecycleError::UnknownJob(id))?;
-        job.try_transition(JobState::Preempted)?;
-        // The transition succeeded, so the job was Running and held its cpu until now.
+        // A job already mid-eviction is Preempted; a lost worker's job is Running.
+        if job.state == JobState::Running {
+            job.try_transition(JobState::Preempted)?;
+        }
+        job.try_transition(JobState::Ready)?;
+        // Either way the job held its cpu until now.
         self.fairshare
             .on_release(job.account, job.request.cpu_millis, now, &config.fairshare);
-        job.try_transition(JobState::Ready)
-            .expect("Preempted -> Ready is legal");
         self.ready.insert(
             job.priority_class,
             id,

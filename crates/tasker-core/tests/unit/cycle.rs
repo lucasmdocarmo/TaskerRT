@@ -1,8 +1,8 @@
 use tasker_core::{
     AccountId, Arena, CycleConfig, FACTOR_SCALE, FairShareConfig, Job, JobId, JobState, Ledger,
-    LifecycleError, MAX_ACCOUNTS, PackBudget, PriorityClass, PriorityConfig, PriorityWeights,
-    Readiness, ResourceRequest, Resources, Scheduler, SlotInventory, USAGE_PER_CORE_SECOND,
-    VirtualDuration, VirtualTime,
+    LifecycleError, MAX_ACCOUNTS, PackBudget, PreemptConfig, PriorityClass, PriorityConfig,
+    PriorityWeights, Readiness, ResourceRequest, Resources, Scheduler, SlotInventory,
+    USAGE_PER_CORE_SECOND, VirtualDuration, VirtualTime,
 };
 
 fn config() -> CycleConfig {
@@ -18,6 +18,7 @@ fn config() -> CycleConfig {
             ResourceRequest::new(4_000, 0, 0),
         ),
         fairshare: FairShareConfig::default(),
+        preempt: PreemptConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 256,
     }
@@ -479,4 +480,51 @@ fn restore_ledgers_replaces_every_account() {
     assert_eq!(s.fairshare().len(), 2);
     assert_eq!(s.fairshare().ledger(AccountId::new(1)).unwrap().usage, 9);
     assert_eq!(s.fairshare().shares_total(), 4);
+}
+
+#[test]
+fn preempt_then_on_preempted_requeues_and_counts() {
+    let cfg = config();
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let mut inv = SlotInventory::from_uniform(1, Resources::new(4_000, 0, 0));
+    let (id, _) = submit(&mut s, &mut jobs, new_job(2_000, PriorityClass::Low), &cfg);
+    assert_eq!(run(&mut s, &mut jobs, &mut inv, &cfg), vec![id]);
+    s.preempt(id, &mut jobs).unwrap();
+    assert_eq!(jobs.get(id).unwrap().state, JobState::Preempted);
+    // Still charged: the worker has not stopped it yet.
+    assert_eq!(
+        s.fairshare().ledger(AccountId::new(0)).unwrap().running_cpu,
+        2_000
+    );
+    s.on_preempted(id, &mut jobs, VirtualTime::ZERO, &cfg)
+        .unwrap();
+    assert_eq!(jobs.get(id).unwrap().state, JobState::Ready);
+    assert_eq!(jobs.get(id).unwrap().preemptions, 1);
+    assert_eq!(
+        s.fairshare().ledger(AccountId::new(0)).unwrap().running_cpu,
+        0
+    );
+    assert_eq!(s.pending(), 1);
+    // Not Preempted any more: a second report is rejected, not double counted.
+    assert!(
+        s.on_preempted(id, &mut jobs, VirtualTime::ZERO, &cfg)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_task_finishing_inside_its_grace_completes() {
+    let cfg = config();
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let mut inv = SlotInventory::from_uniform(1, Resources::new(4_000, 0, 0));
+    let (id, _) = submit(&mut s, &mut jobs, new_job(1_000, PriorityClass::Low), &cfg);
+    run(&mut s, &mut jobs, &mut inv, &cfg);
+    s.preempt(id, &mut jobs).unwrap();
+    let mut promoted = Vec::new();
+    s.on_completed(id, &mut jobs, VirtualTime::ZERO, &cfg, &mut promoted)
+        .unwrap();
+    assert_eq!(jobs.get(id).unwrap().state, JobState::Completed);
+    assert_eq!(jobs.get(id).unwrap().preemptions, 0);
 }
