@@ -33,7 +33,9 @@ impl ControlService {
 fn lifecycle_status(e: LifecycleError) -> Status {
     match e {
         LifecycleError::UnknownJob(_) => Status::not_found(e.to_string()),
-        LifecycleError::Dependency(_) => Status::invalid_argument(e.to_string()),
+        LifecycleError::Dependency(_) | LifecycleError::Account(_) => {
+            Status::invalid_argument(e.to_string())
+        }
         LifecycleError::NotSubmitted { .. } | LifecycleError::Transition(_) => {
             Status::failed_precondition(e.to_string())
         }
@@ -124,6 +126,27 @@ impl v1::control_api_server::ControlApi for ControlService {
                     capacity: Some(resources_to_proto(n.capacity)),
                     allocated: Some(resources_to_proto(n.allocated)),
                     attached: n.attached,
+                })
+                .collect(),
+        }))
+    }
+
+    async fn accounts(
+        &self,
+        _request: Request<v1::AccountsRequest>,
+    ) -> Result<Response<v1::AccountsResponse>, Status> {
+        let (tx, rx) = oneshot::channel();
+        self.push(Command::Query(Query::Accounts { reply: tx }))?;
+        let accounts = rx.await.map_err(|_| gone())?;
+        Ok(Response::new(v1::AccountsResponse {
+            accounts: accounts
+                .into_iter()
+                .map(|a| v1::Account {
+                    account: a.account,
+                    shares: a.shares,
+                    usage: a.usage,
+                    running_cpu_millis: a.running_cpu,
+                    fairshare: a.fairshare,
                 })
                 .collect(),
         }))

@@ -73,7 +73,7 @@ proptest! {
         let later = VirtualTime::from_nanos(
             submit.saturating_add(elapsed_a).saturating_add(extra),
         );
-        prop_assert!(score(&job, later, &cfg) >= score(&job, earlier, &cfg));
+        prop_assert!(score(&job, later, &cfg, 0) >= score(&job, earlier, &cfg, 0));
     }
 
     #[test]
@@ -93,8 +93,23 @@ proptest! {
             ResourceRequest::new(cpu, 0, 0),
             VirtualDuration::from_secs(60),
         );
-        let before = score(&job, VirtualTime::from_nanos(elapsed), &cfg);
-        let after = score(&job, VirtualTime::from_nanos(elapsed + quantum), &cfg);
+        let before = score(&job, VirtualTime::from_nanos(elapsed), &cfg, 0);
+        let after = score(&job, VirtualTime::from_nanos(elapsed + quantum), &cfg, 0);
         prop_assert!(after > before, "{after} should exceed {before}");
     }
+
+    #[test]
+    fn score_never_falls_as_the_fairshare_factor_rises(
+        lo in 0_u64..=FACTOR_SCALE, hi in 0_u64..=FACTOR_SCALE,
+    ) {
+        let mut cfg = config();
+        cfg.weights.fairshare = 1_000;
+        let job = Job::new(
+            AccountId::new(0), PriorityClass::Normal, VirtualTime::ZERO,
+            ResourceRequest::new(1_000, 0, 0), VirtualDuration::from_secs(60),
+        );
+        let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+        prop_assert!(score(&job, VirtualTime::ZERO, &cfg, hi) >= score(&job, VirtualTime::ZERO, &cfg, lo));
+    }
+
 }

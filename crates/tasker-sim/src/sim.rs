@@ -298,7 +298,8 @@ impl Simulation {
                 }
                 self.release(id);
                 let mut cascade = mem::take(&mut self.cascade);
-                self.scheduler.on_failed(id, &mut self.jobs, &mut cascade)?;
+                self.scheduler
+                    .on_failed(id, &mut self.jobs, now, &self.config, &mut cascade)?;
                 self.record(now, Some(id), Action::Failed);
                 for c in &cascade {
                     self.record(now, Some(*c), Action::Cancelled);
@@ -321,7 +322,8 @@ impl Simulation {
                     self.release(id);
                 }
                 let mut cascade = mem::take(&mut self.cascade);
-                self.scheduler.cancel(id, &mut self.jobs, &mut cascade)?;
+                self.scheduler
+                    .cancel(id, &mut self.jobs, now, &self.config, &mut cascade)?;
                 self.record(now, Some(id), Action::Cancelled);
                 for c in &cascade {
                     self.record(now, Some(*c), Action::Cancelled);

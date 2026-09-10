@@ -12,13 +12,14 @@ pub mod policy;
 // `tasker_core::domain::job::Job`.
 pub use cluster::{CapacityError, SlotIndex, SlotInventory, WorkerSlot};
 pub use domain::{
-    AccountId, Arena, Capacity, Deps, Job, JobId, JobState, PriorityClass, ResourceRequest,
-    Resources, TransitionError, VirtualDuration, VirtualTime,
+    AccountId, Arena, ArenaRestoreError, Capacity, Deps, Job, JobId, JobState, PriorityClass,
+    ResourceRequest, Resources, SlotState, TransitionError, VirtualDuration, VirtualTime,
 };
 pub use engine::{CycleConfig, CycleOutcome, LifecycleError, Scheduler};
 pub use policy::{
-    BackfillOutcome, BackfillScratch, DependencyError, DependencyTracker, DispatchDecision,
-    Disposition, FACTOR_SCALE, OrderKey, PackBudget, PackOutcome, PriorityConfig, PriorityHeap,
-    PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob, Score, easy_backfill, pack,
-    reservation_time, score,
+    AccountError, BackfillOutcome, BackfillScratch, DECAY_ONE, DECAY_STEPS, DependencyError,
+    DependencyTracker, DispatchDecision, Disposition, FACTOR_SCALE, FairShare, FairShareConfig,
+    Ledger, MAX_ACCOUNTS, OrderKey, PackBudget, PackOutcome, PriorityConfig, PriorityHeap,
+    PriorityWeights, Readiness, ReadyEntry, ReadySet, RunningJob, Score, USAGE_PER_CORE_SECOND,
+    Usage, decay_factor, easy_backfill, pack, reservation_time, score,
 };

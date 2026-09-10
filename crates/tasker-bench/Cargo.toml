@@ -12,6 +12,7 @@ tasker-sim.workspace = true
 tasker-proto.workspace = true
 tasker-worker.workspace = true
 taskerd.workspace = true
+tasker-wal.workspace = true
 bytes.workspace = true
 tokio.workspace = true
 tonic.workspace = true

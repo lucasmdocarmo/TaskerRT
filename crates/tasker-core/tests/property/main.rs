@@ -6,5 +6,6 @@ mod arena;
 mod backfill;
 mod capacity;
 mod eligibility;
+mod fairshare;
 mod priority;
 mod ready_set;

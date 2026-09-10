@@ -1,4 +1,4 @@
-//! `tasker` — submit, status, cancel, queue, nodes.
+//! `tasker` — submit, status, cancel, queue, nodes, accounts.
 
 use std::time::Duration;
 
@@ -52,6 +52,8 @@ enum Cmd {
     Queue,
     /// Attached workers.
     Nodes,
+    /// Per-account usage and fair-share factors.
+    Accounts,
 }
 
 fn class(s: &str) -> anyhow::Result<v1::PriorityClass> {
@@ -134,24 +136,56 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Cmd::Nodes => {
-            let nodes = client.nodes(v1::NodesRequest {}).await?.into_inner().nodes;
-            println!(
-                "{:<5} {:<12} {:<9} {:>10} {:>10}",
-                "slot", "name", "attached", "cpu_free", "cpu_cap"
+            print_nodes(client.nodes(v1::NodesRequest {}).await?.into_inner().nodes);
+        }
+        Cmd::Accounts => {
+            print_accounts(
+                client
+                    .accounts(v1::AccountsRequest {})
+                    .await?
+                    .into_inner()
+                    .accounts,
             );
-            for n in nodes {
-                let cap = n.capacity.unwrap_or_default();
-                let used = n.allocated.unwrap_or_default();
-                println!(
-                    "{:<5} {:<12} {:<9} {:>10} {:>10}",
-                    n.slot,
-                    if n.name.is_empty() { "-" } else { &n.name },
-                    n.attached,
-                    cap.cpu_millis.saturating_sub(used.cpu_millis),
-                    cap.cpu_millis
-                );
-            }
         }
     }
     Ok(())
+}
+
+/// One row per slot: free and total millicores.
+fn print_nodes(nodes: Vec<v1::Node>) {
+    println!(
+        "{:<5} {:<12} {:<9} {:>10} {:>10}",
+        "slot", "name", "attached", "cpu_free", "cpu_cap"
+    );
+    for n in nodes {
+        let cap = n.capacity.unwrap_or_default();
+        let used = n.allocated.unwrap_or_default();
+        println!(
+            "{:<5} {:<12} {:<9} {:>10} {:>10}",
+            n.slot,
+            if n.name.is_empty() { "-" } else { &n.name },
+            n.attached,
+            cap.cpu_millis.saturating_sub(used.cpu_millis),
+            cap.cpu_millis
+        );
+    }
+}
+
+/// One row per account: usage in core-seconds, fair-share factor as a ratio.
+#[allow(clippy::cast_precision_loss)] // display only
+fn print_accounts(accounts: Vec<v1::Account>) {
+    println!(
+        "{:<8} {:>7} {:>14} {:>12} {:>10}",
+        "account", "shares", "core_seconds", "running_mc", "fairshare"
+    );
+    for a in accounts {
+        println!(
+            "{:<8} {:>7} {:>14.1} {:>12} {:>10.3}",
+            a.account,
+            a.shares,
+            a.usage as f64 / 1e6,
+            a.running_cpu_millis,
+            a.fairshare as f64 / 1e6
+        );
+    }
 }

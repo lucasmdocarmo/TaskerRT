@@ -1,5 +1,6 @@
-# Local cluster workflow. docker-desktop shares the Docker daemon, so images
-# built here are visible to the cluster without a registry.
+# Local cluster workflow. OrbStack and Docker Desktop share their Docker daemon
+# with their Kubernetes, so images built here are visible without a registry.
+# Make sure `docker context` and `kubectl config current-context` are the same tool.
 .PHONY: build apply delete status smoke logs
 
 ROOT := $(shell git rev-parse --show-toplevel)

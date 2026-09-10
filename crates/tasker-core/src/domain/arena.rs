@@ -58,6 +58,28 @@ enum Slot<T> {
     },
 }
 
+/// A slot as a snapshot sees it: enough to rebuild the arena exactly.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlotState<T> {
+    Occupied {
+        generation: u32,
+        value: T,
+    },
+    Vacant {
+        generation: u32,
+        next_free: Option<u32>,
+    },
+}
+
+/// A snapshot does not describe a valid arena.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum ArenaRestoreError {
+    #[error("free list points at slot {0}, which is out of range or occupied")]
+    BadFreeLink(u32),
+    #[error("free list reaches {reachable} of {vacant} vacant slots")]
+    FreeListIncomplete { reachable: usize, vacant: usize },
+}
+
 /// `Vec`-backed storage that reuses freed slots through an intrusive free list.
 #[derive(Debug)]
 pub struct Arena<T> {
@@ -110,6 +132,95 @@ impl<T> Arena<T> {
     #[must_use]
     pub fn capacity_slots(&self) -> usize {
         self.slots.len()
+    }
+
+    /// The handle the next `insert` will return. Lets a caller validate and
+    /// log a value before it enters the arena.
+    #[must_use]
+    pub fn next_id(&self) -> JobId {
+        // The head of the free list is reused first; otherwise the arena grows.
+        if let Some(index) = self.free_head {
+            let Slot::Vacant { generation, .. } = &self.slots[index as usize] else {
+                unreachable!("free list pointed at an occupied slot");
+            };
+            JobId::new(index, *generation)
+        } else {
+            let index = u32::try_from(self.slots.len()).expect("arena exceeded u32::MAX slots");
+            JobId::new(index, 0)
+        }
+    }
+
+    /// Head of the free list, for snapshots.
+    #[must_use]
+    pub const fn free_head(&self) -> Option<u32> {
+        self.free_head
+    }
+
+    /// Every slot in index order, borrowed, for snapshots.
+    pub fn slots(&self) -> impl ExactSizeIterator<Item = SlotState<&T>> {
+        self.slots.iter().map(|slot| match slot {
+            Slot::Occupied { generation, value } => SlotState::Occupied {
+                generation: *generation,
+                value,
+            },
+            Slot::Vacant {
+                generation,
+                next_free,
+            } => SlotState::Vacant {
+                generation: *generation,
+                next_free: *next_free,
+            },
+        })
+    }
+
+    /// Rebuilds an arena exactly as `slots` and `free_head` describe it, so
+    /// later inserts yield the ids the original would have.
+    ///
+    /// # Errors
+    /// `ArenaRestoreError` when the free list is broken or misses a vacant slot.
+    pub fn from_parts(
+        slots: Vec<SlotState<T>>,
+        free_head: Option<u32>,
+    ) -> Result<Self, ArenaRestoreError> {
+        let vacant = slots
+            .iter()
+            .filter(|s| matches!(s, SlotState::Vacant { .. }))
+            .count();
+        // Walk the free list once: every link must land on a vacant slot, and
+        // the walk may not exceed the vacant count (that would be a cycle).
+        let mut cursor = free_head;
+        let mut reachable = 0_usize;
+        while let Some(index) = cursor {
+            match slots.get(index as usize) {
+                Some(SlotState::Vacant { next_free, .. }) if reachable < vacant => {
+                    cursor = *next_free;
+                    reachable += 1;
+                }
+                _ => return Err(ArenaRestoreError::BadFreeLink(index)),
+            }
+        }
+        if reachable != vacant {
+            return Err(ArenaRestoreError::FreeListIncomplete { reachable, vacant });
+        }
+        let len = slots.len() - vacant;
+        let slots = slots
+            .into_iter()
+            .map(|s| match s {
+                SlotState::Occupied { generation, value } => Slot::Occupied { generation, value },
+                SlotState::Vacant {
+                    generation,
+                    next_free,
+                } => Slot::Vacant {
+                    generation,
+                    next_free,
+                },
+            })
+            .collect();
+        Ok(Self {
+            slots,
+            free_head,
+            len,
+        })
     }
 
     /// Stores `value` and returns its handle. Panics past `u32::MAX` slots.

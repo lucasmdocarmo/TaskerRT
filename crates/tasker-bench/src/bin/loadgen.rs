@@ -12,10 +12,20 @@ use hdrhistogram::Histogram;
 use tasker_core::Resources;
 use tasker_proto::v1;
 use tasker_proto::v1::control_api_client::ControlApiClient;
+use tasker_wal::SyncPolicy;
 use tasker_worker::{SleepExecutor, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload};
 use taskerd::{Daemon, DaemonConfig, clock};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+
+fn parse_sync(s: &str) -> Result<SyncPolicy, String> {
+    match s {
+        "full" => Ok(SyncPolicy::Full),
+        "data" => Ok(SyncPolicy::Data),
+        "none" => Ok(SyncPolicy::None),
+        other => Err(format!("unknown sync policy {other:?}: full|data|none")),
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -43,6 +53,12 @@ struct Args {
     /// Scheduler tick, milliseconds.
     #[arg(long, default_value_t = 5)]
     tick_ms: u64,
+    /// Durability root for the in-process daemon. Omit to run in memory only.
+    #[arg(long)]
+    data_dir: Option<std::path::PathBuf>,
+    /// WAL sync policy when `--data-dir` is set: full, data, or none.
+    #[arg(long, default_value = "data", value_parser = parse_sync)]
+    wal_sync: SyncPolicy,
 }
 
 /// Wraps `SleepExecutor`: bytes 8..16 of the payload carry the intended send
@@ -126,6 +142,8 @@ async fn main() -> anyhow::Result<()> {
     let config = DaemonConfig {
         listen: addr,
         tick: Duration::from_millis(args.tick_ms),
+        data_dir: args.data_dir.clone(),
+        wal_sync: args.wal_sync,
         ..DaemonConfig::default()
     };
     let daemon = tokio::spawn(Daemon::new(config).serve(listener, async {

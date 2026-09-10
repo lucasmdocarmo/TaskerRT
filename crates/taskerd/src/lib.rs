@@ -13,17 +13,21 @@ pub mod daemon;
 pub mod dispatcher;
 pub mod engine;
 pub mod inbox;
+pub mod journal;
 pub mod metrics;
 pub mod outbox;
 pub mod registry;
 pub mod scaler;
 pub mod worker_api;
 
-pub use command::{Command, Demand, Dispatch, NodeSummary, Query, QueueSummary, Reply};
+pub use command::{
+    AccountSummary, Command, Demand, Dispatch, NodeSummary, Query, QueueSummary, Reply,
+};
 pub use config::DaemonConfig;
 pub use daemon::{Daemon, DaemonError};
-pub use engine::Engine;
+pub use engine::{Engine, RecoverError};
 pub use inbox::Inbox;
+pub use journal::{Ack, COMMIT_QUEUE_DEPTH, Commit, Journal};
 pub use metrics::Metrics;
 pub use outbox::Outbox;
 pub use registry::Registry;

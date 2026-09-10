@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="daemon + worker" type="CompoundRunConfigurationType">
+    <toRun name="taskerd (in memory)" type="CargoCommandRunConfiguration" />
+    <toRun name="worker (sleep)" type="CargoCommandRunConfiguration" />
+    <method v="2" />
+  </configuration>
+</component>

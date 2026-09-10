@@ -1,6 +1,7 @@
 use tasker_core::{
-    AccountId, Arena, CycleConfig, Job, JobId, JobState, LifecycleError, PackBudget, PriorityClass,
-    PriorityConfig, PriorityWeights, ResourceRequest, Resources, Scheduler, SlotInventory,
+    AccountId, Arena, CycleConfig, FACTOR_SCALE, FairShareConfig, Job, JobId, JobState, Ledger,
+    LifecycleError, MAX_ACCOUNTS, PackBudget, PriorityClass, PriorityConfig, PriorityWeights,
+    Readiness, ResourceRequest, Resources, Scheduler, SlotInventory, USAGE_PER_CORE_SECOND,
     VirtualDuration, VirtualTime,
 };
 
@@ -16,6 +17,7 @@ fn config() -> CycleConfig {
             VirtualDuration::from_secs(3_600),
             ResourceRequest::new(4_000, 0, 0),
         ),
+        fairshare: FairShareConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 256,
     }
@@ -250,7 +252,8 @@ fn failure_cascades_cancellation_through_the_graph() {
     run(&mut s, &mut jobs, &mut inv, &cfg);
 
     let mut cancelled = Vec::new();
-    s.on_failed(a, &mut jobs, &mut cancelled).unwrap();
+    s.on_failed(a, &mut jobs, VirtualTime::ZERO, &cfg, &mut cancelled)
+        .unwrap();
     cancelled.sort();
     let mut expected = vec![b, c];
     expected.sort();
@@ -271,7 +274,8 @@ fn cancel_removes_a_ready_job_from_the_ready_set_and_cascades() {
     assert_eq!(s.pending(), 1);
 
     let mut cancelled = Vec::new();
-    s.cancel(a, &mut jobs, &mut cancelled).unwrap();
+    s.cancel(a, &mut jobs, VirtualTime::ZERO, &cfg, &mut cancelled)
+        .unwrap();
     assert_eq!(cancelled, vec![b]);
     assert_eq!(s.pending(), 0, "a left the ready set");
     assert_eq!(jobs.get(a).unwrap().state, JobState::Cancelled);
@@ -284,7 +288,8 @@ fn submit_with_a_doomed_dependency_is_cancelled_immediately() {
     let mut jobs = Arena::new();
     let mut s = Scheduler::with_slots(16);
     let (a, _) = submit(&mut s, &mut jobs, new_job(100, PriorityClass::Normal), &cfg);
-    s.cancel(a, &mut jobs, &mut Vec::new()).unwrap();
+    s.cancel(a, &mut jobs, VirtualTime::ZERO, &cfg, &mut Vec::new())
+        .unwrap();
 
     let (b, sb) = submit(&mut s, &mut jobs, job_depending_on(100, &[a]), &cfg);
     assert_eq!(sb, JobState::Cancelled);
@@ -349,4 +354,129 @@ fn requeue_rejects_a_job_that_is_not_running() {
             .unwrap_err(),
         LifecycleError::Transition(_)
     ));
+}
+
+#[test]
+fn dispatch_charges_the_account_and_completion_releases_it() {
+    let mut cfg = config();
+    cfg.priority.weights.fairshare = 1_000;
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let mut inv = SlotInventory::from_uniform(1, Resources::new(4_000, 0, 0));
+    let a = AccountId::new(3);
+    let mut job = new_job(2_000, PriorityClass::Normal);
+    job.account = a;
+    let (id, _) = submit(&mut s, &mut jobs, job, &cfg);
+    assert_eq!(run(&mut s, &mut jobs, &mut inv, &cfg), vec![id]);
+    assert_eq!(s.fairshare().ledger(a).unwrap().running_cpu, 2_000);
+    // Nothing has accrued at t = 0, so the factor is still at its maximum.
+    assert_eq!(s.fairshare().factor(a), FACTOR_SCALE);
+
+    // Ten seconds later a cycle with nothing to schedule still refreshes ledgers.
+    let later = VirtualTime::from_nanos(10_000_000_000);
+    let mut decisions = Vec::new();
+    s.run_cycle(&mut jobs, &mut inv, &[], later, &cfg, &mut decisions);
+    assert_eq!(
+        s.fairshare().ledger(a).unwrap().usage,
+        20 * USAGE_PER_CORE_SECOND
+    );
+    // Ids 0..=3 exist with one share each, so account 3 holds all the usage on a
+    // quarter of the shares: U/S = 4, and the factor is 2^-4.
+    assert_eq!(s.fairshare().factor(a), FACTOR_SCALE / 16);
+
+    let mut promoted = Vec::new();
+    s.on_completed(id, &mut jobs, later, &cfg, &mut promoted)
+        .unwrap();
+    assert_eq!(s.fairshare().ledger(a).unwrap().running_cpu, 0);
+}
+
+#[test]
+fn an_account_past_the_cap_is_rejected_at_submit() {
+    let cfg = config();
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let mut job = new_job(1_000, PriorityClass::Normal);
+    job.account = AccountId::new(MAX_ACCOUNTS);
+    let id = jobs.insert(job);
+    assert!(matches!(
+        s.submit(id, &mut jobs, VirtualTime::ZERO, &cfg),
+        Err(LifecycleError::Account(_))
+    ));
+}
+
+#[test]
+fn check_submit_predicts_submit_without_mutating() {
+    let cfg = config();
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let mut inv = SlotInventory::from_uniform(1, Resources::new(4_000, 0, 0));
+    let (done, _) = submit(&mut s, &mut jobs, new_job(100, PriorityClass::Normal), &cfg);
+    run(&mut s, &mut jobs, &mut inv, &cfg);
+    let mut promoted = Vec::new();
+    s.on_completed(done, &mut jobs, VirtualTime::ZERO, &cfg, &mut promoted)
+        .unwrap();
+
+    let next = jobs.next_id();
+    let ok = job_depending_on(100, &[done]);
+    assert!(matches!(
+        s.check_submit(next, &ok, &jobs),
+        Ok(Readiness::Ready)
+    ));
+    let mut bad = new_job(100, PriorityClass::Normal);
+    bad.deps.push(JobId::from_bits(0xDEAD_0000_0000_0042));
+    assert!(matches!(
+        s.check_submit(next, &bad, &jobs),
+        Err(LifecycleError::Dependency(_))
+    ));
+    let mut selfish = new_job(100, PriorityClass::Normal);
+    selfish.deps.push(next);
+    assert!(matches!(
+        s.check_submit(next, &selfish, &jobs),
+        Err(LifecycleError::Dependency(_))
+    ));
+    // Nothing was inserted or registered by any of the checks.
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs.next_id(), next);
+    assert_eq!(s.pending(), 0);
+}
+
+#[test]
+fn restore_running_replays_a_dispatch() {
+    let mut cfg = config();
+    cfg.priority.weights.fairshare = 1_000;
+    let mut s = Scheduler::new();
+    let mut jobs = Arena::new();
+    let (id, _) = submit(
+        &mut s,
+        &mut jobs,
+        new_job(2_000, PriorityClass::Normal),
+        &cfg,
+    );
+    assert_eq!(s.pending(), 1);
+    let at = VirtualTime::from_nanos(5_000_000_000);
+    s.restore_running(id, &mut jobs, at, &cfg).unwrap();
+    assert_eq!(jobs.get(id).unwrap().state, JobState::Running);
+    assert_eq!(s.pending(), 0, "left the ready set without a cycle");
+    assert_eq!(
+        s.fairshare().ledger(AccountId::new(0)).unwrap().running_cpu,
+        2_000
+    );
+    // A second restore is an illegal transition, not a silent double charge.
+    assert!(matches!(
+        s.restore_running(id, &mut jobs, at, &cfg),
+        Err(LifecycleError::Transition(_))
+    ));
+}
+
+#[test]
+fn restore_ledgers_replaces_every_account() {
+    let mut s = Scheduler::new();
+    let ledgers = vec![
+        Ledger::from_parts(7, 0, 1, VirtualTime::ZERO, VirtualTime::ZERO),
+        Ledger::from_parts(9, 1_000, 3, VirtualTime::ZERO, VirtualTime::ZERO),
+    ];
+    s.restore_ledgers(ledgers).unwrap();
+    assert_eq!(s.fairshare().len(), 2);
+    assert_eq!(s.fairshare().ledger(AccountId::new(1)).unwrap().usage, 9);
+    assert_eq!(s.fairshare().shares_total(), 4);
 }

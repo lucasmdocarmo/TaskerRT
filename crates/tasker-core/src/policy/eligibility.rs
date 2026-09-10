@@ -81,24 +81,20 @@ impl DependencyTracker {
         self.dependents[index].clear();
     }
 
-    /// Records `job`'s dependencies and classifies it. Every dependency must be
-    /// a live job other than itself. Leaves no reverse edges behind when the
-    /// result is `Cancelled`.
+    /// Pass 1 of `register`: validates and classifies without mutating, so a
+    /// caller can reject a job before it enters the arena.
     ///
     /// # Errors
     /// `DependencyError` for the first dependency that does not resolve.
-    pub fn register(
-        &mut self,
+    pub fn classify(
+        &self,
         id: JobId,
         job: &Job,
         jobs: &Arena<Job>,
     ) -> Result<Readiness, DependencyError> {
-        // Pass 1: validate and classify without mutating, so a rejection or a
-        // doomed job leaves the tracker untouched.
         let mut pending = 0_u32;
         for dep in &job.deps {
-            // A job exists in the arena before it is submitted, so it could name
-            // itself. That is a cycle of length one; reject it here.
+            // A job could name the id it is about to receive: a cycle of length one.
             if *dep == id {
                 return Err(DependencyError {
                     job: id,
@@ -117,14 +113,37 @@ impl DependencyTracker {
                 _ => pending += 1,
             }
         }
+        Ok(if pending == 0 {
+            Readiness::Ready
+        } else {
+            Readiness::Blocked
+        })
+    }
+
+    /// Records `job`'s dependencies and classifies it. Every dependency must be
+    /// a live job other than itself. Leaves no reverse edges behind when the
+    /// result is `Cancelled`.
+    ///
+    /// # Errors
+    /// `DependencyError` for the first dependency that does not resolve.
+    pub fn register(
+        &mut self,
+        id: JobId,
+        job: &Job,
+        jobs: &Arena<Job>,
+    ) -> Result<Readiness, DependencyError> {
+        let readiness = self.classify(id, job, jobs)?;
+        // A doomed job leaves no reverse edges behind.
+        if matches!(readiness, Readiness::Cancelled) {
+            return Ok(readiness);
+        }
 
         // Pass 2: commit.
         self.reserve_slots(id.index() as usize + 1);
         let index = id.index() as usize;
         self.clear_index(index);
         self.owner[index] = id;
-        self.unsatisfied[index] = pending;
-
+        let mut pending = 0_u32;
         for dep in &job.deps {
             // Only live, non-terminal deps get a reverse edge; completed ones never fire.
             let is_pending = jobs.get(*dep).is_some_and(|t| {
@@ -136,6 +155,7 @@ impl DependencyTracker {
             if !is_pending {
                 continue;
             }
+            pending += 1;
             self.reserve_slots(dep.index() as usize + 1);
             let dep_index = dep.index() as usize;
             // A dependency that was never registered (e.g. seeded as already running)
@@ -147,11 +167,8 @@ impl DependencyTracker {
             self.dependents[dep_index].push(id);
         }
 
-        Ok(if pending == 0 {
-            Readiness::Ready
-        } else {
-            Readiness::Blocked
-        })
+        self.unsatisfied[index] = pending;
+        Ok(readiness)
     }
 
     /// Decrements each dependent's count; those reaching zero are appended to

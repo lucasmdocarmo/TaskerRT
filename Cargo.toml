@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members  = ["crates/tasker-core", "crates/tasker-sim", "crates/tasker-bench", "crates/tasker-proto", "crates/taskerd", "crates/tasker-worker", "crates/tasker-cli"]
+members  = ["crates/tasker-core", "crates/tasker-sim", "crates/tasker-wal", "crates/tasker-bench", "crates/tasker-proto", "crates/taskerd", "crates/tasker-worker", "crates/tasker-cli"]
 
 [workspace.package]
 version      = "0.1.0"
@@ -16,6 +16,7 @@ proptest = "1"
 criterion = "0.8.2"
 tasker-core = { path = "crates/tasker-core" }
 tasker-sim = { path = "crates/tasker-sim" }
+tasker-wal = { path = "crates/tasker-wal" }
 tasker-proto = { path = "crates/tasker-proto" }
 taskerd = { path = "crates/taskerd" }
 tasker-worker = { path = "crates/tasker-worker" }
@@ -24,6 +25,7 @@ hdrhistogram = "7"
 prometheus = "0.14"
 axum = "0.8"
 bytes = "1"
+crc32fast = "1"
 tonic = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"

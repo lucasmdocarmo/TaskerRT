@@ -1,8 +1,13 @@
 //! `taskerd` — the control plane binary. A few lines of wiring; the logic is in the library.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::time::Duration;
 
+use anyhow::Context;
 use clap::Parser;
+use tasker_core::{CycleConfig, FairShareConfig, VirtualDuration};
+use tasker_wal::SyncPolicy;
 use taskerd::{Daemon, DaemonConfig};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -23,6 +28,47 @@ struct Args {
     min_workers: u32,
     #[arg(long, default_value_t = 8)]
     max_workers: u32,
+    /// Fair-share usage half-life, in seconds. 0 remembers only running work.
+    #[arg(long, default_value_t = 3_600)]
+    half_life_secs: u64,
+    /// Fair-share weights as `account=shares`, comma separated, e.g. `0=3,1=1`.
+    #[arg(long)]
+    shares: Option<String>,
+    /// Durability root. Omit to run in memory only.
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+    /// How each WAL batch is synced: full, data, or none.
+    #[arg(long, default_value = "data", value_parser = parse_sync)]
+    wal_sync: SyncPolicy,
+    /// Snapshot and rotate once the log passes this many bytes.
+    #[arg(long, default_value_t = 64 << 20)]
+    wal_rotate_bytes: u64,
+    /// Forget terminal jobs this many seconds after they finish.
+    #[arg(long, default_value_t = 300)]
+    retain_secs: u64,
+}
+
+fn parse_sync(s: &str) -> Result<SyncPolicy, String> {
+    match s {
+        "full" => Ok(SyncPolicy::Full),
+        "data" => Ok(SyncPolicy::Data),
+        "none" => Ok(SyncPolicy::None),
+        other => Err(format!("unknown sync policy {other:?}: full|data|none")),
+    }
+}
+
+/// Parses `0=3,1=1`. Empty input is no overrides.
+fn parse_shares(s: &str) -> anyhow::Result<Vec<(u32, u32)>> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (account, shares) = pair
+                .split_once('=')
+                .with_context(|| format!("expected account=shares, got {pair:?}"))?;
+            Ok((account.trim().parse()?, shares.trim().parse()?))
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -34,13 +80,28 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
+    let defaults = DaemonConfig::default();
     let config = DaemonConfig {
         listen: args.listen,
         metrics_listen: args.metrics_listen,
         worker_cpu_millis: args.worker_cpu_millis,
         min_workers: args.min_workers,
         max_workers: args.max_workers,
-        ..DaemonConfig::default()
+        shares: args
+            .shares
+            .as_deref()
+            .map(parse_shares)
+            .transpose()?
+            .unwrap_or_default(),
+        data_dir: args.data_dir,
+        wal_sync: args.wal_sync,
+        wal_rotate_bytes: args.wal_rotate_bytes,
+        retain: Duration::from_secs(args.retain_secs),
+        cycle: CycleConfig {
+            fairshare: FairShareConfig::new(VirtualDuration::from_secs(args.half_life_secs)),
+            ..defaults.cycle
+        },
+        ..defaults
     };
     let listener = TcpListener::bind(config.listen).await?;
     Daemon::new(config)

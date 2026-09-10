@@ -9,6 +9,7 @@ service ControlApi {
   rpc Status(StatusRequest) returns (StatusResponse);
   rpc Queue(QueueRequest) returns (QueueResponse);
   rpc Nodes(NodesRequest) returns (NodesResponse);
+  rpc Accounts(AccountsRequest) returns (AccountsResponse);
 }
 
 message SubmitRequest {
@@ -51,3 +52,15 @@ message Node {
   bool attached = 5;
 }
 message NodesResponse { repeated Node nodes = 1; }
+
+message AccountsRequest {}
+message Account {
+  uint32 account = 1;
+  uint32 shares = 2;
+  // Decayed usage in millicore-milliseconds: 1 000 000 per core-second.
+  uint64 usage = 3;
+  uint64 running_cpu_millis = 4;
+  // Fair-share factor in 0..=1 000 000.
+  uint64 fairshare = 5;
+}
+message AccountsResponse { repeated Account accounts = 1; }

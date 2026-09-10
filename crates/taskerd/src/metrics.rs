@@ -4,7 +4,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
-use prometheus::{Encoder, Histogram, HistogramOpts, IntGauge, Registry, TextEncoder};
+use prometheus::{
+    Encoder, GaugeVec, Histogram, HistogramOpts, IntGauge, Opts, Registry, TextEncoder,
+};
 use tokio::net::TcpListener;
 
 /// Registry plus typed handles. Updated by the scheduler thread; atomic ops only.
@@ -16,6 +18,10 @@ pub struct Metrics {
     pub running: IntGauge,
     pub workers_attached: IntGauge,
     pub workers_desired: IntGauge,
+    /// Decayed usage per account, in core-seconds.
+    pub account_usage: GaugeVec,
+    /// Fair-share factor per account, 0..=1.
+    pub account_fairshare: GaugeVec,
     pub cycle_seconds: Histogram,
 }
 
@@ -29,6 +35,13 @@ impl Metrics {
         let registry = Registry::new();
         let gauge = |name: &str, help: &str| {
             let g = IntGauge::new(name, help).expect("valid metric name");
+            registry
+                .register(Box::new(g.clone()))
+                .expect("unique metric name");
+            g
+        };
+        let gauge_vec = |name: &str, help: &str| {
+            let g = GaugeVec::new(Opts::new(name, help), &["account"]).expect("valid metric name");
             registry
                 .register(Box::new(g.clone()))
                 .expect("unique metric name");
@@ -49,6 +62,14 @@ impl Metrics {
             running: gauge("tasker_jobs_running", "Jobs running on workers"),
             workers_attached: gauge("tasker_workers_attached", "Attached workers"),
             workers_desired: gauge("tasker_workers_desired", "Workers the scheduler wants"),
+            account_usage: gauge_vec(
+                "tasker_account_usage_core_seconds",
+                "Decayed usage per account, in core-seconds",
+            ),
+            account_fairshare: gauge_vec(
+                "tasker_account_fairshare",
+                "Fair-share factor per account, 0..=1",
+            ),
             cycle_seconds,
             registry,
         })

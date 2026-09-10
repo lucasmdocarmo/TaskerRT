@@ -1,12 +1,17 @@
 //! The daemon and in-process workers talking over real gRPC on loopback.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use bytes::Bytes;
 use tasker_core::Resources;
 use tasker_proto::v1;
 use tasker_proto::v1::control_api_client::ControlApiClient;
-use tasker_worker::{SleepExecutor, Worker, WorkerConfig, sleep_payload};
+use tasker_wal::SyncPolicy;
+use tasker_worker::{SleepExecutor, TaskError, TaskExecutor, Worker, WorkerConfig, sleep_payload};
 use taskerd::{Daemon, DaemonConfig, DaemonError};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -21,19 +26,35 @@ struct Rig {
 }
 
 async fn start() -> Rig {
+    start_with(None, None).await
+}
+
+/// A fresh, empty directory under the OS temp root, unique per process and test.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("taskerrt-e2e-{}-{name}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Binds `addr` when given, so a restarted daemon can reuse its port.
+async fn start_with(data_dir: Option<PathBuf>, addr: Option<SocketAddr>) -> Rig {
     // Logs go to the test's captured output; RUST_LOG selects the level.
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .try_init()
         .ok();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bind = addr.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
+    let listener = TcpListener::bind(bind).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let config = DaemonConfig {
         listen: addr,
         tick: Duration::from_millis(2),
         heartbeat_timeout: Duration::from_millis(500),
+        data_dir,
+        wal_sync: SyncPolicy::None,
         ..DaemonConfig::default()
     };
     let daemon = tokio::spawn(Daemon::new(config).serve(listener, async {
@@ -56,6 +77,15 @@ async fn start() -> Rig {
 
 impl Rig {
     fn worker(&self, name: &str, cpu: u32) -> JoinHandle<Result<(), tasker_worker::WorkerError>> {
+        self.worker_with(name, cpu, SleepExecutor)
+    }
+
+    fn worker_with<X: TaskExecutor>(
+        &self,
+        name: &str,
+        cpu: u32,
+        executor: X,
+    ) -> JoinHandle<Result<(), tasker_worker::WorkerError>> {
         let config = WorkerConfig {
             daemon: format!("http://{}", self.addr),
             name: name.into(),
@@ -63,10 +93,11 @@ impl Rig {
             heartbeat: Duration::from_millis(100),
             drain_timeout: Duration::from_secs(5),
         };
-        tokio::spawn(Worker::new(config, SleepExecutor).run())
+        tokio::spawn(Worker::new(config, executor).run())
     }
 
     async fn wait_attached(&mut self, n: usize) {
+        let mut last = Vec::new();
         for _ in 0..500 {
             let nodes = self
                 .client
@@ -78,9 +109,13 @@ impl Rig {
             if nodes.iter().filter(|x| x.attached).count() == n {
                 return;
             }
+            last = nodes
+                .iter()
+                .map(|x| (x.slot, x.name.clone(), x.attached))
+                .collect();
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        panic!("{n} workers never attached");
+        panic!("{n} workers never attached; last saw {last:?}");
     }
 
     async fn submit(&mut self, cpu: u32, sleep: Duration, deps: Vec<u64>) -> (u64, v1::JobState) {
@@ -236,5 +271,98 @@ async fn an_unknown_job_is_not_found_and_a_bad_submit_is_invalid() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    rig.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accounts_report_usage_for_the_account_that_ran() {
+    let mut rig = start().await;
+    let _w = rig.worker("w1", 4_000);
+    rig.wait_attached(1).await;
+    let resp = rig
+        .client
+        .submit(v1::SubmitRequest {
+            account: 3,
+            priority_class: v1::PriorityClass::Normal as i32,
+            request: Some(v1::Resources {
+                cpu_millis: 2_000,
+                mem_bytes: 0,
+                gpus: 0,
+            }),
+            walltime_nanos: 10_000_000_000,
+            deps: vec![],
+            payload: sleep_payload(Duration::from_millis(150)),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    rig.wait_state(resp.job_id, v1::JobState::Completed, Duration::from_secs(5))
+        .await;
+
+    let accounts = rig
+        .client
+        .accounts(v1::AccountsRequest {})
+        .await
+        .unwrap()
+        .into_inner()
+        .accounts;
+    for a in &accounts {
+        eprintln!("{a:?}");
+    }
+    assert_eq!(accounts.len(), 4, "ids 0..=3 exist once account 3 was seen");
+    let ran = &accounts[3];
+    // 150 ms on two cores is 300 000 millicore-milliseconds at minimum.
+    assert!(ran.usage >= 150 * 2_000, "usage {}", ran.usage);
+    assert_eq!(ran.running_cpu_millis, 0);
+    assert!(ran.fairshare < 1_000_000);
+    let idle = &accounts[2];
+    assert_eq!(idle.usage, 0);
+    assert_eq!(idle.fairshare, 1_000_000);
+    rig.shutdown().await;
+}
+
+/// Counts executions, then sleeps like `SleepExecutor`.
+#[derive(Clone)]
+struct Counting(Arc<AtomicUsize>);
+
+impl TaskExecutor for Counting {
+    async fn run(&self, payload: Bytes) -> Result<(), TaskError> {
+        // Relaxed: the test reads the total only after every task has finished.
+        self.0.fetch_add(1, Ordering::Relaxed);
+        SleepExecutor.run(payload).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_daemon_reclaims_work_its_worker_kept_running() {
+    let dir = scratch("restart");
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut rig = start_with(Some(dir.clone()), None).await;
+    let addr = rig.addr;
+    let _w1 = rig.worker_with("w1", 4_000, Counting(Arc::clone(&runs)));
+    rig.wait_attached(1).await;
+    let (done, _) = rig.submit(1_000, Duration::from_millis(50), vec![]).await;
+    rig.wait_state(done, v1::JobState::Completed, Duration::from_secs(3))
+        .await;
+    let (long, _) = rig.submit(1_000, Duration::from_secs(3), vec![]).await;
+    rig.wait_state(long, v1::JobState::Running, Duration::from_secs(3))
+        .await;
+    let (after, state) = rig
+        .submit(1_000, Duration::from_millis(50), vec![long])
+        .await;
+    assert_eq!(state, v1::JobState::Blocked);
+    // The daemon goes away. w1 keeps running `long` and starts reconnecting.
+    rig.shutdown().await;
+
+    let mut rig = start_with(Some(dir), Some(addr)).await;
+    rig.wait_attached(1).await;
+    assert_eq!(rig.state(done).await, v1::JobState::Completed);
+    assert_eq!(rig.state(long).await, v1::JobState::Running);
+    rig.wait_state(long, v1::JobState::Completed, Duration::from_secs(6))
+        .await;
+    rig.wait_state(after, v1::JobState::Completed, Duration::from_secs(3))
+        .await;
+    // done, long, after: three executions. A rerun of `long` would make four.
+    assert_eq!(runs.load(Ordering::Relaxed), 3, "long ran exactly once");
     rig.shutdown().await;
 }

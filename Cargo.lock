@@ -1468,6 +1468,7 @@ dependencies = [
  "tasker-core",
  "tasker-proto",
  "tasker-sim",
+ "tasker-wal",
  "tasker-worker",
  "taskerd",
  "tokio",
@@ -1521,6 +1522,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tasker-wal"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "crc32fast",
+ "proptest",
+ "tasker-core",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "tasker-worker"
 version = "0.1.0"
 dependencies = [
@@ -1551,6 +1563,7 @@ dependencies = [
  "prometheus",
  "tasker-core",
  "tasker-proto",
+ "tasker-wal",
  "tasker-worker",
  "thiserror 2.0.20",
  "tokio",

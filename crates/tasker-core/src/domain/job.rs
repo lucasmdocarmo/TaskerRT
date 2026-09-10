@@ -115,7 +115,7 @@ pub struct TransitionError {
 pub type Deps = SmallVec<[JobId; 4]>;
 
 /// A unit of work.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Job {
     pub account: AccountId,
     pub priority_class: PriorityClass,

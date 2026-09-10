@@ -1,4 +1,4 @@
-use tasker_core::{Arena, JobId};
+use tasker_core::{Arena, ArenaRestoreError, JobId, SlotState};
 
 #[test]
 fn insert_then_get_returns_value() {
@@ -59,4 +59,68 @@ fn iter_yields_only_live_entries() {
     arena.remove(a);
     let live: Vec<_> = arena.iter().map(|(id, v)| (id, *v)).collect();
     assert_eq!(live, vec![(b, 2)]);
+}
+
+#[test]
+fn next_id_predicts_insert_through_reuse() {
+    let mut arena = Arena::new();
+    assert_eq!(arena.next_id(), arena.insert("a"));
+    let b = arena.insert("b");
+    assert_eq!(arena.next_id(), arena.insert("c"));
+    arena.remove(b);
+    // The freed slot is reused at the bumped generation.
+    let predicted = arena.next_id();
+    assert_eq!(predicted.index(), b.index());
+    assert_eq!(predicted.generation(), b.generation() + 1);
+    assert_eq!(predicted, arena.insert("d"));
+}
+
+#[test]
+fn from_parts_reproduces_the_free_list_exactly() {
+    let mut arena = Arena::new();
+    let ids: Vec<_> = (0..5).map(|i| arena.insert(i)).collect();
+    arena.remove(ids[1]);
+    arena.remove(ids[3]);
+    let slots: Vec<SlotState<i32>> = arena
+        .slots()
+        .map(|s| match s {
+            SlotState::Occupied { generation, value } => SlotState::Occupied {
+                generation,
+                value: *value,
+            },
+            SlotState::Vacant {
+                generation,
+                next_free,
+            } => SlotState::Vacant {
+                generation,
+                next_free,
+            },
+        })
+        .collect();
+    let mut restored = Arena::from_parts(slots, arena.free_head()).unwrap();
+    assert_eq!(restored.len(), arena.len());
+    // Both arenas hand out the same ids in the same order from here on.
+    for _ in 0..3 {
+        assert_eq!(restored.insert(9), arena.insert(9));
+    }
+}
+
+#[test]
+fn from_parts_rejects_a_broken_free_list() {
+    let slots = vec![SlotState::<u8>::Vacant {
+        generation: 0,
+        next_free: Some(7),
+    }];
+    assert!(matches!(
+        Arena::from_parts(slots, Some(0)),
+        Err(ArenaRestoreError::BadFreeLink(7))
+    ));
+    let slots = vec![SlotState::<u8>::Vacant {
+        generation: 0,
+        next_free: None,
+    }];
+    assert!(matches!(
+        Arena::from_parts(slots, None),
+        Err(ArenaRestoreError::FreeListIncomplete { .. })
+    ));
 }

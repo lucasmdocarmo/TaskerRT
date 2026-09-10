@@ -29,15 +29,15 @@ fn job_at(submit: u64, class: PriorityClass, cpu: u32) -> Job {
 #[test]
 fn a_brand_new_lowest_class_smallest_job_scores_zero() {
     let job = job_at(0, PriorityClass::Low, 0);
-    assert_eq!(score(&job, VirtualTime::ZERO, &config()), 0);
+    assert_eq!(score(&job, VirtualTime::ZERO, &config(), 0), 0);
 }
 
 #[test]
 fn age_raises_the_score() {
     let cfg = config();
     let job = job_at(0, PriorityClass::Low, 0);
-    let young = score(&job, VirtualTime::from_nanos(0), &cfg);
-    let old = score(&job, VirtualTime::from_nanos(1_800_000_000_000), &cfg);
+    let young = score(&job, VirtualTime::from_nanos(0), &cfg, 0);
+    let old = score(&job, VirtualTime::from_nanos(1_800_000_000_000), &cfg, 0);
     assert!(old > young, "{old} should exceed {young}");
 }
 
@@ -45,8 +45,8 @@ fn age_raises_the_score() {
 fn age_factor_clamps_at_the_horizon() {
     let cfg = config();
     let job = job_at(0, PriorityClass::Low, 0);
-    let at_horizon = score(&job, VirtualTime::from_nanos(3_600_000_000_000), &cfg);
-    let past_horizon = score(&job, VirtualTime::from_nanos(36_000_000_000_000), &cfg);
+    let at_horizon = score(&job, VirtualTime::from_nanos(3_600_000_000_000), &cfg, 0);
+    let past_horizon = score(&job, VirtualTime::from_nanos(36_000_000_000_000), &cfg, 0);
     assert_eq!(at_horizon, past_horizon);
     assert_eq!(at_horizon, FACTOR_SCALE * 1_000);
 }
@@ -55,8 +55,8 @@ fn age_factor_clamps_at_the_horizon() {
 fn higher_qos_class_scores_higher() {
     let cfg = config();
     let now = VirtualTime::ZERO;
-    let low = score(&job_at(0, PriorityClass::Low, 0), now, &cfg);
-    let urgent = score(&job_at(0, PriorityClass::Urgent, 0), now, &cfg);
+    let low = score(&job_at(0, PriorityClass::Low, 0), now, &cfg, 0);
+    let urgent = score(&job_at(0, PriorityClass::Urgent, 0), now, &cfg, 0);
     assert!(urgent > low);
 }
 
@@ -64,8 +64,8 @@ fn higher_qos_class_scores_higher() {
 fn larger_jobs_score_higher_at_equal_age_and_class() {
     let cfg = config();
     let now = VirtualTime::ZERO;
-    let small = score(&job_at(0, PriorityClass::Normal, 500), now, &cfg);
-    let large = score(&job_at(0, PriorityClass::Normal, 4_000), now, &cfg);
+    let small = score(&job_at(0, PriorityClass::Normal, 500), now, &cfg, 0);
+    let large = score(&job_at(0, PriorityClass::Normal, 4_000), now, &cfg, 0);
     assert!(large > small, "size factor favors larger jobs");
 }
 
@@ -84,32 +84,22 @@ fn zero_weight_removes_a_factor_entirely() {
     let job = job_at(0, PriorityClass::Low, 4_000);
     let now = VirtualTime::from_nanos(3_600_000_000_000);
     assert_eq!(
-        score(&job, now, &cfg),
+        score(&job, now, &cfg, 0),
         0,
         "only qos counts, and Low is ordinal 0"
     );
 }
 
 #[test]
-fn fairshare_contributes_nothing_until_m5() {
-    let cfg = PriorityConfig::new(
-        PriorityWeights {
-            age: 0,
-            qos: 0,
-            fairshare: u32::MAX,
-            size: 0,
-        },
-        VirtualDuration::from_secs(3_600),
-        ResourceRequest::new(4_000, 8 << 30, 2),
-    );
-    assert_eq!(
-        score(
-            &job_at(0, PriorityClass::Urgent, 4_000),
-            VirtualTime::ZERO,
-            &cfg
-        ),
-        0
-    );
+fn the_fairshare_factor_adds_weight_times_factor_and_clamps() {
+    let mut cfg = config();
+    cfg.weights.fairshare = 1_000;
+    let job = job_at(0, PriorityClass::Low, 0);
+    let base = score(&job, VirtualTime::ZERO, &cfg, 0);
+    let full = score(&job, VirtualTime::ZERO, &cfg, FACTOR_SCALE);
+    assert_eq!(full - base, FACTOR_SCALE * 1_000);
+    // A factor past the scale is clamped, never allowed to overflow the sum.
+    assert_eq!(score(&job, VirtualTime::ZERO, &cfg, u64::MAX), full);
 }
 
 #[test]

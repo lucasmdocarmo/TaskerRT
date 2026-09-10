@@ -125,3 +125,61 @@ figure dropped the instant the queue emptied. The 40 jobs completed on 8
 workers in 5 rounds of 20 s, as the arithmetic predicts. Draining workers
 finished their in-flight job before exiting; no job was requeued during
 scale-down (`worker left ... requeued=0` in the daemon log).
+
+## M5 fair-share (2026-09-09)
+
+Same fixture as M1 (`synthetic(10_000, 1_000, 64)`, seed `0x5EED_1234_ABCD_0001`),
+now with fair-share weight 1 000 and 16 accounts. Recorded on a **loaded**
+machine (load average 5.4–6.1; Docker Desktop, the `tasker` cluster, and a
+browser running), which the M1 numbers were not. Two consecutive runs differed
+by 5 % on the large cycle, so the cycle rows below are provisional until
+re-measured quiet; the two new micro-benchmarks are stable across runs.
+
+| Benchmark | M1 | M5 run 1 | M5 run 2 | Note |
+|---|---|---|---|---|
+| `priority/score_one_job` | 1.20 ns | 1.34 ns | 1.34 ns | one `min` and one multiply-add more; real |
+| `fairshare/refresh_16_accounts` | — | 47.4 ns | — | new: touch 16 ledgers, 16 factors, one 5 ms tick |
+| `cycle/full` 1,000 × 100 | 576 µs | 626 µs | 610 µs | under load; noise band ≈ ±5 % |
+| `cycle/full` 10,000 × 1,000 | 1.83 ms | 2.03 ms | 1.93 ms | under load; noise band ≈ ±5 % |
+
+`refresh` costs about 3 ns per account, not the 100 ns the design budgeted.
+The `u128` division in the factor takes LLVM's 64-bit fast path while
+`usage_total × shares` fits in 64 bits, and the sixteen ledgers are
+independent, so their divisions overlap in the out-of-order window. The
+per-candidate cost added to rescoring is one indexed load of the account's
+factor. `run_cycle` still allocates nothing (`tests/alloc.rs`).
+
+To refresh the cycle rows on a quiet machine:
+
+```
+cargo bench -p tasker-bench --bench scheduling_cycle -- "cycle/full"
+```
+
+## M6 durability (2026-09-09)
+
+Same load-generator fixture as M3 (`--rate 2000 --seconds 10`, 4 in-process
+sleep workers, 100-millicore 10 ms jobs, 5 ms tick), now with the in-process
+daemon writing a WAL under `--data-dir`. Same loaded machine as the M5 rows
+(load average 5.7–6.1); the in-memory row is the same-session control.
+
+| Mode | p50 | p90 | p99 | p99.9 | mean |
+|---|---|---|---|---|---|
+| in memory (control) | 1.37 ms | 2.13 ms | 4.38 ms | 8.52 ms | 1.47 ms |
+| `--wal-sync none` | 1.43 ms | 2.26 ms | 5.03 ms | 17.1 ms | 1.57 ms |
+| `--wal-sync data` | 10.98 ms | 13.28 ms | 18.56 ms | 23.68 ms | 11.18 ms |
+| `--wal-sync full` | 10.20 ms | 12.57 ms | 16.25 ms | 22.18 ms | 10.36 ms |
+
+`data` and `full` are indistinguishable on macOS: Rust's `sync_data` and
+`sync_all` both issue `F_FULLFSYNC`, which forces the drive's cache. One such
+sync costs about 4 ms here, and every tick's batch pays one. `none` adds
+roughly 60 µs at p50 over the control: the extra hop through the writer
+thread, which fires the acks and releases the dispatches.
+
+**The number that mattered was the one before this table.** The first run with
+`data` measured **p50 = 271 ms**. The commit channel between the engine and the
+writer was 64 deep; with a 4 ms sync per 5 ms tick the writer saturates, the
+channel fills, and steady-state latency is 64 syncs. Shrinking the channel to
+depth 1 (`COMMIT_QUEUE_DEPTH`) makes later ticks merge into one pending batch
+while the writer is busy, so a saturated disk grows the batch instead of the
+queue: 271 ms became 11 ms with no other change. That is group commit doing
+its job, and it only does it when the queue in front of the syncer is shallow.

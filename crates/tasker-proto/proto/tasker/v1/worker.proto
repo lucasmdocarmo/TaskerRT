@@ -19,6 +19,8 @@ message WorkerMessage {
 message Hello {
   string name = 1;
   Resources capacity = 2;
+  // Jobs this worker is still running, when it reconnects after losing the daemon.
+  repeated uint64 in_flight = 3;
 }
 
 message Heartbeat {}

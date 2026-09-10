@@ -14,11 +14,17 @@ say "waiting for taskerd"
 kubectl -n $NS rollout status deploy/taskerd --timeout=120s >/dev/null
 
 say "port-forward 7070 (grpc) and 9090 (metrics)"
+# A local daemon on the same ports would silently receive every submit below.
+if lsof -nP -iTCP:7070 -sTCP:LISTEN >/dev/null 2>&1 || lsof -nP -iTCP:9090 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "FAIL: port 7070 or 9090 is already in use locally (a local taskerd?); stop it first"; exit 1
+fi
 kubectl -n $NS port-forward svc/taskerd 7070:7070 9090:9090 >/dev/null 2>&1 &
 PF=$!
 trap 'kill $PF 2>/dev/null || true' EXIT
 sleep 2
 
+# Prove we are talking to the cluster daemon: its worker is a pod.
+$CLI nodes | grep -q "tasker-worker-" || { echo "FAIL: the daemon on 7070 has no pod worker; is this the cluster?"; exit 1; }
 say "baseline: replicas=$(replicas) desired=$(desired)"
 [ "$(replicas)" -ge 1 ] || { echo "FAIL: no worker ready"; exit 1; }
 

@@ -5,6 +5,7 @@ mod arena;
 mod backfill;
 mod cycle;
 mod eligibility;
+mod fairshare;
 mod job;
 mod pack;
 mod priority;

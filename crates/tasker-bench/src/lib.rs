@@ -5,9 +5,9 @@
 //! support the before/after claims spec §7.1 requires.
 
 use tasker_core::{
-    AccountId, Arena, CycleConfig, Job, JobId, JobState, PackBudget, PriorityClass, PriorityConfig,
-    PriorityWeights, ResourceRequest, Resources, RunningJob, SlotInventory, VirtualDuration,
-    VirtualTime,
+    AccountId, Arena, CycleConfig, FairShareConfig, Job, JobId, JobState, PackBudget,
+    PriorityClass, PriorityConfig, PriorityWeights, ResourceRequest, Resources, RunningJob,
+    SlotInventory, VirtualDuration, VirtualTime,
 };
 use tasker_sim::SplitMix64;
 
@@ -94,12 +94,13 @@ pub fn bench_config() -> CycleConfig {
             PriorityWeights {
                 age: 1_000,
                 qos: 1_000,
-                fairshare: 0,
+                fairshare: 1_000,
                 size: 100,
             },
             VirtualDuration::from_secs(3_600),
             ResourceRequest::new(SLOT_CPU, SLOT_MEM, 4),
         ),
+        fairshare: FairShareConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 10_000,
     }

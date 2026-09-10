@@ -31,6 +31,8 @@ pub enum Command {
     WorkerJoined {
         name: String,
         capacity: Capacity,
+        /// Jobs the worker is still running from before it lost the daemon.
+        in_flight: Vec<JobId>,
         reply: Reply<SlotIndex>,
     },
     WorkerLeft {
@@ -58,6 +60,9 @@ pub enum Query {
     Demand {
         reply: Reply<Demand>,
     },
+    Accounts {
+        reply: Reply<Vec<AccountSummary>>,
+    },
 }
 
 /// Counts for the `Queue` RPC.
@@ -77,6 +82,18 @@ pub struct NodeSummary {
     pub capacity: Capacity,
     pub allocated: Resources,
     pub attached: bool,
+}
+
+/// One account's ledger for the `Accounts` RPC.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AccountSummary {
+    pub account: u32,
+    pub shares: u32,
+    /// Millicore-milliseconds.
+    pub usage: u64,
+    pub running_cpu: u64,
+    /// `0..=FACTOR_SCALE`.
+    pub fairshare: u64,
 }
 
 /// What the scheduler thinks the worker pool should be.
@@ -128,6 +145,7 @@ impl fmt::Debug for Query {
             Self::Queue { .. } => "Queue",
             Self::Nodes { .. } => "Nodes",
             Self::Demand { .. } => "Demand",
+            Self::Accounts { .. } => "Accounts",
         };
         f.write_str(name)
     }

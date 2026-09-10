@@ -4,7 +4,10 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use tasker_bench::{bench_config, synthetic};
-use tasker_core::{DispatchDecision, Scheduler, VirtualTime, score};
+use tasker_core::{
+    AccountId, DispatchDecision, FACTOR_SCALE, FairShare, FairShareConfig, Scheduler,
+    VirtualDuration, VirtualTime, score,
+};
 
 const SEED: u64 = 0x5EED_1234_ABCD_0001;
 const SLOTS: u32 = 64;
@@ -16,7 +19,14 @@ fn bench_priority_score(c: &mut Criterion) {
     let job = workload.jobs.get(workload.admitted[0]).expect("job exists");
 
     c.bench_function("priority/score_one_job", |b| {
-        b.iter(|| black_box(score(black_box(job), black_box(now), &config.priority)));
+        b.iter(|| {
+            black_box(score(
+                black_box(job),
+                black_box(now),
+                &config.priority,
+                black_box(FACTOR_SCALE),
+            ))
+        });
     });
 }
 
@@ -92,9 +102,30 @@ fn bench_full_cycle(c: &mut Criterion) {
     group.finish();
 }
 
+/// The per-cycle fair-share pass: touch every ledger, recompute every factor.
+fn bench_fairshare_refresh(c: &mut Criterion) {
+    let cfg = FairShareConfig::default();
+    let mut fs = FairShare::new();
+    // Sixteen accounts with work in flight, as in the synthetic workload.
+    for a in 0..16_u32 {
+        fs.ensure(AccountId::new(a)).expect("below MAX_ACCOUNTS");
+        fs.on_dispatch(AccountId::new(a), 4_000, VirtualTime::ZERO, &cfg);
+    }
+    let mut now = VirtualTime::ZERO;
+    c.bench_function("fairshare/refresh_16_accounts", |b| {
+        b.iter(|| {
+            // One 5 ms tick per iteration, so accrual and the factor are live work.
+            now = now.saturating_add(VirtualDuration::from_nanos(5_000_000));
+            fs.refresh(black_box(now), &cfg);
+            black_box(fs.factor(AccountId::new(0)))
+        });
+    });
+}
+
 criterion_group!(
     benches,
     bench_priority_score,
+    bench_fairshare_refresh,
     bench_submit,
     bench_full_cycle
 );

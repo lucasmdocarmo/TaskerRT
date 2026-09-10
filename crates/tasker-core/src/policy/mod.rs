@@ -3,12 +3,17 @@
 
 pub mod backfill;
 pub mod eligibility;
+pub mod fairshare;
 pub mod pack;
 pub mod priority;
 pub mod ready_set;
 
 pub use backfill::{BackfillOutcome, BackfillScratch, RunningJob, easy_backfill, reservation_time};
 pub use eligibility::{DependencyError, DependencyTracker, Readiness};
+pub use fairshare::{
+    AccountError, DECAY_ONE, DECAY_STEPS, FairShare, FairShareConfig, Ledger, MAX_ACCOUNTS,
+    USAGE_PER_CORE_SECOND, Usage, decay_factor,
+};
 pub use pack::{DispatchDecision, Disposition, PackBudget, PackOutcome, pack};
 pub use priority::{FACTOR_SCALE, OrderKey, PriorityConfig, PriorityWeights, Score, score};
 pub use ready_set::{PriorityHeap, ReadyEntry, ReadySet};

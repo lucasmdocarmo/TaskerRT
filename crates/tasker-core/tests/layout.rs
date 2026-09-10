@@ -1,7 +1,7 @@
 //! Size guards for hot-path types. Rust reorders fields by alignment, so the
 //! expected sizes below are (sum of fields) rounded up to the largest alignment.
 
-use tasker_core::{DispatchDecision, JobId, OrderKey, ReadyEntry, RunningJob};
+use tasker_core::{DispatchDecision, JobId, Ledger, OrderKey, ReadyEntry, RunningJob};
 
 #[test]
 fn job_id_is_one_machine_word() {
@@ -30,4 +30,10 @@ fn dispatch_decision_is_16_bytes() {
 fn order_key_is_16_bytes() {
     // Score 8 + Reverse<u64> 8. `Reverse` is a transparent wrapper.
     assert_eq!(std::mem::size_of::<OrderKey>(), 16);
+}
+
+#[test]
+fn ledger_is_40_bytes() {
+    // usage 8 + running_cpu 8 + two VirtualTime 16 + shares 4 = 36, padded to 40.
+    assert_eq!(std::mem::size_of::<Ledger>(), 40);
 }

@@ -14,7 +14,7 @@ pub const FACTOR_SCALE: u64 = 1_000_000;
 pub struct PriorityWeights {
     pub age: u32,
     pub qos: u32,
-    /// Ignored until fair-share (M5).
+    /// Weight of the account's fair-share factor.
     pub fairshare: u32,
     pub size: u32,
 }
@@ -24,7 +24,7 @@ impl Default for PriorityWeights {
         Self {
             age: 1_000,
             qos: 1_000,
-            fairshare: 0,
+            fairshare: 1_000,
             size: 100,
         }
     }
@@ -73,9 +73,10 @@ const fn factor(value: u64, max: u64) -> u64 {
     (clamped * FACTOR_SCALE) / max
 }
 
-/// The job's priority at `now`.
+/// The job's priority at `now`. `fairshare_factor` is the account's value from
+/// `FairShare::factor`, already in `0..=FACTOR_SCALE`.
 #[must_use]
-pub fn score(job: &Job, now: VirtualTime, config: &PriorityConfig) -> Score {
+pub fn score(job: &Job, now: VirtualTime, config: &PriorityConfig, fairshare_factor: u64) -> Score {
     let age = now.saturating_sub_time(job.submit_time).as_nanos();
     let age_factor = factor(age, config.age_horizon.as_nanos());
 
@@ -85,8 +86,8 @@ pub fn score(job: &Job, now: VirtualTime, config: &PriorityConfig) -> Score {
         (PriorityClass::COUNT - 1) as u64,
     );
 
-    // Identically zero until M5.
-    let fairshare_factor = 0_u64;
+    // Clamp so a caller's bad value cannot break the overflow bound below.
+    let fairshare_factor = fairshare_factor.min(FACTOR_SCALE);
 
     let size_factor = factor(
         u64::from(job.request.cpu_millis),

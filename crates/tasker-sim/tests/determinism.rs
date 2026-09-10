@@ -2,8 +2,8 @@
 //! failure reproducible.
 
 use tasker_core::{
-    CycleConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest, Resources,
-    SlotInventory, VirtualDuration,
+    CycleConfig, FairShareConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest,
+    Resources, SlotInventory, VirtualDuration,
 };
 use tasker_sim::{ScenarioParams, Simulation, Trace, generate};
 
@@ -14,6 +14,7 @@ fn config() -> CycleConfig {
             VirtualDuration::from_secs(3_600),
             ResourceRequest::new(8_000, 0, 0),
         ),
+        fairshare: FairShareConfig::default(),
         budget: PackBudget::default(),
         max_candidates: 256,
     }

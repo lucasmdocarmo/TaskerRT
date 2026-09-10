@@ -65,6 +65,12 @@ impl v1::worker_api_server::WorkerApi for WorkerService {
             .push(Command::WorkerJoined {
                 name: hello.name.clone(),
                 capacity,
+                in_flight: hello
+                    .in_flight
+                    .iter()
+                    .copied()
+                    .map(JobId::from_bits)
+                    .collect(),
                 reply: reply_tx,
             })
             .map_err(|_| Status::resource_exhausted("ingest ring is full"))?;

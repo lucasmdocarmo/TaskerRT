@@ -1,11 +1,14 @@
 //! Daemon configuration with production-shaped defaults.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tasker_core::{
-    CycleConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest, VirtualDuration,
+    CycleConfig, FairShareConfig, PackBudget, PriorityConfig, PriorityWeights, ResourceRequest,
+    VirtualDuration,
 };
+use tasker_wal::SyncPolicy;
 
 /// Everything the daemon needs that is not runtime state.
 #[derive(Clone, Debug)]
@@ -26,6 +29,15 @@ pub struct DaemonConfig {
     pub worker_cpu_millis: u32,
     pub min_workers: u32,
     pub max_workers: u32,
+    /// Fair-share weights per account id; unlisted accounts weigh 1.
+    pub shares: Vec<(u32, u32)>,
+    /// Durability root. `None` runs in memory only, as before M6.
+    pub data_dir: Option<PathBuf>,
+    pub wal_sync: SyncPolicy,
+    /// Snapshot and start a fresh log once the log passes this many bytes.
+    pub wal_rotate_bytes: u64,
+    /// Terminal jobs are forgotten this long after they finish.
+    pub retain: Duration,
     pub cycle: CycleConfig,
 }
 
@@ -42,6 +54,11 @@ impl Default for DaemonConfig {
             worker_cpu_millis: 4_000,
             min_workers: 1,
             max_workers: 8,
+            shares: Vec::new(),
+            data_dir: None,
+            wal_sync: SyncPolicy::Data,
+            wal_rotate_bytes: 64 << 20,
+            retain: Duration::from_mins(5),
             cycle: CycleConfig {
                 priority: PriorityConfig::new(
                     PriorityWeights::default(),
@@ -49,6 +66,7 @@ impl Default for DaemonConfig {
                     // The size factor normalizes against this; a large reference keeps it small.
                     ResourceRequest::new(u32::MAX, u64::MAX, u8::MAX),
                 ),
+                fairshare: FairShareConfig::new(VirtualDuration::from_secs(3_600)),
                 budget: PackBudget::default(),
                 max_candidates: 10_000,
             },

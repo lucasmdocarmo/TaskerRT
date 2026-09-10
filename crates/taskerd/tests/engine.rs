@@ -55,6 +55,7 @@ fn join(r: &mut Rig, cpu: u32) -> u32 {
         .push(Command::WorkerJoined {
             name: "w".into(),
             capacity: Resources::new(cpu, 0, 0),
+            in_flight: vec![],
             reply: tx,
         })
         .unwrap();

@@ -1,8 +1,18 @@
 # TaskerRT
 
-An HPC-style task scheduler in Rust. The scheduling core is a pure library:
-no async runtime, no I/O, no wall clock. Execution on Kubernetes comes in
-later milestones.
+An HPC-style batch scheduler in Rust. The scheduling core is a pure library
+with no async runtime, no I/O, and no wall clock, which makes it deterministic
+to simulate and cheap to benchmark. Around it sit a gRPC control plane, a
+worker that runs tasks as sleeps or subprocesses and drains cleanly on
+SIGTERM, a CLI, an open-loop load generator, and Kubernetes manifests where
+KEDA reads the scheduler's own demand signal to scale the worker pool.
+Delivered so far: M1 scheduler core, M2 DAG dependencies and simulation,
+M3 execution, M4 Kubernetes and autoscaling, M5 fair-share, M6 durability
+with worker reconciliation. Remaining: preemption, latency hardening.
+
+**New here?** [GUIDE.md](GUIDE.md) walks through building, running, submitting
+jobs, watching them, fair-share, durability, the Kubernetes deployment, and
+every flag, with expected output at each step.
 
 ## Layout
 
@@ -36,6 +46,8 @@ Dependencies point inward only: `engine → policy → cluster → domain`.
 Every `use crate::...` line in the source is a check of that rule.
 
 ## Running it
+
+The short version is below; [GUIDE.md](GUIDE.md) has the full walkthrough.
 
 Two terminals. The daemon:
 
@@ -83,10 +95,40 @@ cargo run -q -p tasker-cli -- queue
 cargo run -q -p tasker-cli -- nodes
 ```
 
-`--dep <id>` (repeatable) declares a dependency; `cancel <id>` cancels a job and
-everything downstream of it.
+```bash
+cargo run -q -p tasker-cli -- accounts
+```
 
-### Kubernetes (docker-desktop + KEDA)
+`--dep <id>` (repeatable) declares a dependency; `--account <n>` charges the
+job to an account (default 0); `cancel <id>` cancels a job and everything
+downstream of it; `accounts` lists per-account usage in core-seconds and the
+fair-share factor.
+
+### Fair-share
+
+Every job is charged to its account: `cpu_millis × milliseconds held`, accrued
+continuously and halved every half-life (`taskerd --half-life-secs`, default
+3600). The priority formula's fair-share term is `2^(-U/S)`: 1 for an account
+that has used nothing, ½ for one using exactly its share of the cluster, and
+falling toward 0 beyond that. Shares come from `--shares 0=3,1=1`; unlisted
+accounts weigh 1. The arithmetic is integer-only (a compile-time Q48 table of
+`2^(-k/1024)`), so the simulator's determinism guarantee covers it.
+`tasker accounts` and the `tasker_account_*` gauges show the ledgers.
+
+### Durability
+
+`taskerd --data-dir ./data` turns on the write-ahead log. Every accepted submit,
+dispatch, and lifecycle transition is framed, checksummed, and appended; a
+writer thread syncs each tick's batch (`--wal-sync full|data|none`, default
+`data`) and only then acknowledges the submits and releases the dispatches that
+depended on it. Restart replays the log through the scheduler's own lifecycle
+API, so job ids survive and clients' handles stay valid; workers that kept
+their tasks running reconnect and reclaim them instead of rerunning. The log is compacted
+by a snapshot at every start and whenever it passes `--wal-rotate-bytes`;
+terminal jobs are forgotten after `--retain-secs` (default 300). Without
+`--data-dir` the daemon runs in memory only.
+
+### Kubernetes (OrbStack or Docker Desktop, plus KEDA)
 
 `deploy/` holds a multi-stage `Dockerfile` and plain-YAML manifests. The daemon
 implements KEDA's external scaler protocol: KEDA polls it for how many workers
@@ -96,7 +138,8 @@ replicas to exactly that number. Scale-down speed is the HPA stabilization
 window set in `scaledobject.yaml`. A worker that receives SIGTERM tells the
 daemon it is draining, finishes what it is running, and exits.
 
-Prerequisites: Docker Desktop with Kubernetes enabled, `kubectl`, and KEDA
+Prerequisites: a local Kubernetes sharing your `docker` daemon (OrbStack, or
+Docker Desktop with Kubernetes enabled), `kubectl`, and KEDA
 (`helm install keda kedacore/keda -n keda --create-namespace`).
 
 ```bash
@@ -237,7 +280,9 @@ Open the repository root, and it discovers both crates.
 - **Run a single test:** click the ▶ gutter icon beside any `#[test]`.
 - **Run a whole test file:** ▶ beside the file's first line, or right-click the
   file → *Run*.
-- **Run configurations:** *Run → Edit Configurations → + → Cargo*, then set the
+- **Run configurations:** `.run/` ships daemon, worker, and load-generator
+  configurations plus a `daemon + worker` compound; they appear in the Run
+  widget on open. To add your own: *Run → Edit Configurations → + → Cargo*, then set the
   command line to any of the commands above (e.g. `test --workspace`, or
   `clippy --workspace --all-targets -- -D warnings`). Save one per command.
 - **Property test depth:** in the Cargo run configuration, add
